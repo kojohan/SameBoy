@@ -1,71 +1,122 @@
-# SameBoy
+# SameBoy Link
 
-SameBoy is an open source Game Boy (DMG) and Game Boy Color (CGB) emulator, written in portable C. It has a native Cocoa frontend for macOS, an SDL frontend for other operating systems, and a libretro core. It also includes a text-based debugger with an expression evaluator. Visit [the website](https://sameboy.github.io/).
+**SameBoy Link** is an experimental Windows-focused fork of [SameBoy](https://github.com/LIJI32/SameBoy) aimed at making Game Boy and Game Boy Color Link Cable multiplayer simple both locally and over the Internet.
 
-## Features
-Features common to both Cocoa and SDL versions:
- * Supports Game Boy (DMG) and Game Boy Color (CGB) emulation
- * Lets you choose the model you want to emulate regardless of ROM
- * High quality 96KHz audio
- * Battery save support
- * Save states
- * Includes open source DMG and CGB boot ROMs:
-   * Complete support for (and documentation of) *all* game-specific palettes in the CGB boot ROM, for accurate emulation of Game Boy games on a Game Boy Color
-   * Supports manual palette selection with key combinations, with 4 additional new palettes (A + B + direction)
-   * Supports palette selection in a CGB game, forcing it to run in 'paletted' DMG mode, if ROM allows doing so.
-   * Support for games with a non-Nintendo logo in the header
-   * No long animation in the DMG boot
- * Advanced text-based debugger with an expression evaluator, disassembler, conditional breakpoints, conditional watchpoints, backtracing and other features
- * Extremely high accuracy
- * Emulates [PCM_12 and PCM_34 registers](https://github.com/LIJI32/GBVisualizer)
- * T-cycle accurate emulation of LCD timing effects, supporting the Demotronic trick, Prehistorik Man, [GBVideoPlayer](https://github.com/LIJI32/GBVideoPlayer) and other tech demos
- * Real time clock emulation
- * Retina/High DPI display support, allowing a wider range of scaling factors without artifacts
- * Optional frame blending (Requires OpenGL 3.2 or later)
- * Several [scaling algorithms](https://sameboy.github.io/scaling/) (Including exclusive algorithms like OmniScale and Anti-aliased Scale2x; Requires OpenGL 3.2 or later or Metal)
+> Development branch: `sameboy-link`
+>
+> Status: planning / early implementation. The architecture and milestones are documented; the multiplayer frontend is not yet a finished release.
 
-Features currently supported only with the Cocoa version:
- * Native Cocoa interface, with support for all system-wide features, such as drag-and-drop and smart titlebars
- * Game Boy Camera support
- 
-[Read more](https://sameboy.github.io/features/).
+## What we are building
 
-## Compatibility
-SameBoy passes all of [blargg's test ROMs](http://gbdev.gg8.se/wiki/articles/Test_ROMs#Blargg.27s_tests), all of [mooneye-gb's](https://github.com/Gekkio/mooneye-gb) tests (Some tests require the original boot ROMs), and all of [Wilbert Pol's tests](https://github.com/wilbertpol/mooneye-gb/tree/master/tests/acceptance). SameBoy should work with most games and demos, please [report](https://github.com/LIJI32/SameBoy/issues/new) any broken ROM. The latest results for SameBoy's automatic tester are available [here](https://sameboy.github.io/automation/).
+The first Internet implementation uses a **Remote Play** model:
 
-## Contributing
-SameBoy is an open-source project licensed under the Expat license (with an additional exception for the iOS folder), and you're welcome to contribute by creating issues, implementing new features, improving emulation accuracy and fixing existing open issues. You can read the [contribution guidelines](CONTRIBUTING.md) to make sure your contributions are as effective as possible.
+```text
+HOST PC
 
-## Compilation
-SameBoy requires the following tools and libraries to build:
- * clang (Recommended; required for macOS) or GCC
- * make
- * macOS Cocoa frontend: macOS SDK and Xcode (For command line tools and ibtool)
- * SDL frontend: libsdl2
-   * When building for operating systems other than Windows and macOS, libpng is also required
- * [rgbds](https://github.com/gbdev/rgbds/releases/), for boot ROM compilation
- * [cppp](https://github.com/LIJI32/cppp), for cleaning up headers when compiling SameBoy as a library
+SameBoy P1 <------ local emulated link cable ------> SameBoy P2
+   ^                                                   ^
+   |                                                   |
+local input                                      remote input
+                                                       |
+                                                       |
+CLIENT PC ---------------------------------------------+
 
-On Windows, SameBoy also requires:
- * Visual Studio (For headers, etc.)
- * [Git Bash](https://git-scm.com/downloads/win) or another distribution of basic Unix utilities
-   * Git Bash does not include make, you can get it [here](https://sourceforge.net/projects/ezwinports/files/make-4.4.1-without-guile-w32-bin.zip/download).
- * Running `vcvars64.bat` or `vcvarsx86_amd64.bat` before running make. Make sure all required tools, libraries, and headers are in %PATH%, %lib%, and %include%`, respectively. (see [Build FAQ](https://github.com/LIJI32/SameBoy/blob/master/build-faq.md) for more details on Windows compilation)
+HOST PC ---------------- P2 video/audio -------------> CLIENT PC
+```
 
-To compile, simply run `make`. The targets are:
- * `cocoa` (Default for macOS)
- * `sdl` (Default for everything else)
- * `lib` (Creates libsameboy.o and libsameboy.a for statically linking SameBoy, libsameboy.dylib/so/dll for dynamically linking SameBoy, as well as a headers directory with corresponding headers)
-   * Static libraries are currently not supported on Windows due to linker limitations.
- * `ios` (Plain iOS .app bundle), `ios-ipa` (iOS IPA archive for side-loading), `ios-deb` (iOS deb package for jailbroken devices)
- * `libretro`
- * `bootroms`
- * `tester` 
+Both Game Boy instances run on the host, so the Game Boy link cable remains local and timing-accurate. The client only sends Player 2 input and receives Player 2 video/audio.
 
-You may also specify `CONF=debug` (default), `CONF=release`, `CONF=native_release` or `CONF=fat_release`  to control optimization, symbols and multi-architectures. `native_release` is faster than `release`, but is optimized to the host's CPU and therefore is not portable. `fat_release` is exclusive to macOS and builds x86-64 and ARM64 fat binaries; this requires using a recent enough `clang` and macOS SDK using `xcode-select`, or setting them explicitly with `CC=` and `SYSROOT=`, respectively. All other configurations will build to your host architecture, except for the iOS targets. You may set `BOOTROMS_DIR=...` to a directory containing precompiled boot ROM files, otherwise the build system will compile and use SameBoy's own boot ROMs.
+This means:
 
-The SDL port will look for resource files with a path relative to executable and inside the directory specified by the `DATA_DIR` variable. If you are packaging SameBoy, you may wish to override this by setting the `DATA_DIR` variable during compilation to the target path of the directory containing all files (apart from the executable, that's not necessary) from the `build/bin/SDL` directory in the source tree. Make sure the variable ends with a `/` character. On FreeDesktop environments, `DATA_DIR` will default to `/usr/local/share/sameboy/`. `PREFIX` and `DESTDIR` follow their standard usage and default to an empty string an `/usr/local`, respectively
+- only the host needs the ROM;
+- Remote Play does not require both users to match ROM region/revision/hash;
+- P1 and P2 use separate save files on the host;
+- the client can scale/render the native Game Boy framebuffer locally;
+- nearest-neighbour/integer scaling and reusable SameBoy filters can remain client-side;
+- Internet connection should require no manual IP/port forwarding in the normal flow.
 
-Linux, BSD, and other FreeDesktop users can run `sudo make install` to install SameBoy as both a GUI app and a command line tool.
+A later optional **Native NetLink** backend may run one emulator on each PC and send serial/link information over the Internet, but it is deliberately not the first implementation.
 
-SameBoy is compiled and tested on macOS, Ubuntu and 64-bit Windows 10.
+## Planned user experience
+
+Local multiplayer:
+
+```text
+Open ROM -> Local Link -> assign P1/P2 controllers -> Play
+```
+
+Internet multiplayer:
+
+```text
+Host Online Game -> Copy Invite Link -> friend clicks -> SameBoy Link opens -> Connected
+```
+
+The connection layer is planned to support direct IPv6/UDP, NAT traversal/hole punching, UPnP IGD, NAT-PMP, PCP and relay fallback so users normally never need to configure their router manually.
+
+## Streaming goals
+
+The remote client receives Player 2's **native Game Boy framebuffer**, not a pre-scaled desktop capture.
+
+Planned quality presets:
+
+- **Balanced** — default low-latency native-resolution stream;
+- **Pixel Perfect** — lossless native-resolution framebuffer;
+- **Low Bandwidth** — more aggressive compression for constrained links.
+
+Scaling and display effects happen locally on the client. GPU hardware encode/decode may be supported where benchmarks show a real end-to-end latency or CPU benefit.
+
+## Project documentation
+
+Start here depending on what you want to know:
+
+- **[ROADMAP.md](ROADMAP.md)** — clear phase-by-phase development plan and exit criteria.
+- **[TODO.md](TODO.md)** — actionable development checklist.
+- **[TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md)** — contributor-friendly architecture overview.
+- **[SAMEBOY_LINK_TECHNICAL_PLAN.md](SAMEBOY_LINK_TECHNICAL_PLAN.md)** — detailed implementation decisions and technical notes.
+- **[SAMEBOY_LINK_PLAN.md](SAMEBOY_LINK_PLAN.md)** — product/feature planning notes.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — upstream SameBoy contribution guidance; fork-specific contributor notes will be added as implementation begins.
+
+## Current implementation priority
+
+The immediate development order is:
+
+1. establish a reproducible Windows SDL build;
+2. refactor the one-core SDL frontend into `EmulatorSlot` / `GameSession` abstractions without changing single-player behavior;
+3. create a second SameBoy core;
+4. port the proven local link implementation from `libretro/libretro.c`;
+5. add independent P1/P2 input, rendering and save paths;
+6. prove Remote Play input + native framebuffer streaming on LAN;
+7. add Internet coordination, zero-config connectivity and invite links;
+8. optimize latency based on measurements.
+
+See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.
+
+## Technical principle
+
+Keep the SameBoy emulator core as close to upstream as practical. Multiplayer policy, Remote Play, networking, invitations and save-transfer logic should live in the Windows/SDL frontend and fork-specific modules rather than being mixed into `Core/`.
+
+SameBoy already exposes the serial APIs we need, and its libretro frontend already contains a working two-instance local link reference. Our first task is to adapt that architecture cleanly to the Windows SDL frontend.
+
+## Saves
+
+Remote Play represents two independent virtual cartridges on the host. P1 and P2 must therefore never share the same active save path.
+
+V1 keeps both saves on the host. A later feature may let the remote player upload a personal P2 save before a session and receive the updated save afterward using transactional backup/hash verification.
+
+## ROMs
+
+SameBoy Link does not distribute commercial ROMs. Users are responsible for providing game data they are legally entitled to use.
+
+## Upstream SameBoy
+
+This repository is based on **SameBoy**, an open-source Game Boy / Game Boy Color emulator written in portable C with SDL, Cocoa and libretro frontends.
+
+Official upstream repository: [LIJI32/SameBoy](https://github.com/LIJI32/SameBoy)
+
+Official SameBoy website: [sameboy.github.io](https://sameboy.github.io/)
+
+The project should remain structured so future upstream changes can be merged with minimal conflict.
+
+## License
+
+SameBoy is licensed under the Expat license, with the upstream project's additional iOS exception. See [LICENSE](LICENSE) for the complete license text and copyright notices.
