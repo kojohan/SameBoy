@@ -99,6 +99,89 @@ Introduce `EmulatorSlot` objects and a `GameSession`. Port libretro's proven ser
 
 Send full current button state rather than key-down/key-up deltas. Each packet contains protocol/session ID, sequence number, button mask and client timestamp. Newer state supersedes older state. UDP is appropriate for the realtime prototype.
 
+## Remote Play save-file handling
+
+Remote Play runs both Game Boy instances on the host. Therefore the host is the authoritative owner of active emulator state and battery-backed save data during a session. The client does not need a ROM or active emulator save in the initial Remote Play implementation.
+
+### V1: host-owned P1 and P2 saves
+
+Each `EmulatorSlot` must have its own save path. Never allow both linked cores to read/write the same `.sav` file.
+
+Example:
+
+```text
+Pokemon Crystal [P1].sav
+Pokemon Crystal [P2].sav
+```
+
+or an equivalent session/profile directory layout.
+
+This is required for games such as Pokémon where both linked systems represent independent cartridges/trainers and may save independently.
+
+Rules:
+
+- P1 and P2 always use distinct battery-save files.
+- The same ROM may be loaded into both cores, but save paths remain separate.
+- Writes must use SameBoy's normal battery-save semantics per core.
+- A crash or disconnect must not cause P1 and P2 save paths to alias or overwrite one another.
+- The host should preserve P2's save for future sessions unless the user explicitly deletes/replaces it.
+
+### Future: client-owned portable P2 save
+
+A later feature may allow the remote player to bring a personal `.sav` without requiring a ROM or local emulation.
+
+Session start:
+
+```text
+CLIENT P2.sav
+      |
+secure/reliable file transfer
+      v
+HOST temporary P2 save
+      |
+SameBoy Core B
+```
+
+Session end:
+
+```text
+SameBoy Core B saves
+      |
+HOST finalized P2.sav
+      |
+verified transfer
+      v
+CLIENT replaces local copy only after validation
+```
+
+The client save is therefore a portable data file, not a second live emulator state.
+
+### Save-transfer safety
+
+Client-owned save transfer must be transactional:
+
+1. Keep the client's previous save as a backup.
+2. Transfer into a temporary file on the host/client rather than overwriting the destination directly.
+3. Record file size and a cryptographic hash (for example SHA-256) before/after transfer.
+4. Only promote the temporary file to the active `.sav` after the transfer and hash verify successfully.
+5. If the session or network fails, retain the last known-good save.
+6. Never accept arbitrary paths from the peer; save files must remain inside a controlled profile/session directory.
+7. Save transfer uses a reliable channel and is separate from realtime UDP input/video traffic.
+
+### Disconnect policy
+
+For V1, a remote disconnect does not delete P2's host save. The host continues to own the last safely flushed P2 save.
+
+For future client-owned saves, an unexpected disconnect should preserve the updated host-side temporary/backup state and allow explicit recovery/resume rather than silently replacing either side's last known-good copy.
+
+### RTC and auxiliary cartridge data
+
+Some games may persist more than a single plain `.sav` payload (for example RTC-related cartridge state). The save manager should therefore be designed around a per-slot persistent-data bundle rather than assuming every game is exactly one `.sav` forever. V1 may expose `.sav` first, but the API should leave room for SameBoy-supported RTC/auxiliary persistent files.
+
+### Native NetLink distinction
+
+This save policy applies to Remote Play. In future Native NetLink mode, each PC runs its own emulator and therefore normally owns its own local ROM and save data independently. Save files should not be synchronized automatically in Native NetLink mode.
+
 ## Audio
 
 Keep per-core audio separate. Host local output may select P1/P2/mix; Remote Play normally sends P2 audio. Use small blocks and deliberately small jitter buffers.
@@ -117,13 +200,15 @@ Initial engineering targets on typical modern PCs are under ~1 ms host emulator 
 4. **T3 Dual scheduler** — cycle-delta scheduling and long-running link stability.
 5. **T4 Multiplayer input** — separate P1/P2 controller ownership.
 6. **T5 Dual presentation** — side-by-side local rendering and separate audio/framebuffer access.
-7. **T6 Remote input** — direct-IP/LAN P2 controller packets; both cores still run on host.
-8. **T7 Raw/native video reference** — stream native P2 framebuffer on LAN and measure latency.
-9. **T8 Quality/codec layer** — Balanced, Pixel Perfect and Low Bandwidth; client-side SameBoy rendering/filter paths where practical.
-10. **T9 Remote audio** — bounded low-latency P2 audio.
-11. **T10 Internet sessions** — room codes, endpoint negotiation, NAT traversal/P2P and relay fallback.
-12. **T11 Latency optimization** — tune scheduling, queues, transport and presentation from telemetry.
-13. **T12 Native NetLink** — optional serial-over-Internet backend after Remote Play is stable.
+7. **T6 Save isolation** — guaranteed independent P1/P2 persistent save paths before Internet sessions.
+8. **T7 Remote input** — direct-IP/LAN P2 controller packets; both cores still run on host.
+9. **T8 Raw/native video reference** — stream native P2 framebuffer on LAN and measure latency.
+10. **T9 Quality/codec layer** — Balanced, Pixel Perfect and Low Bandwidth; client-side SameBoy rendering/filter paths where practical.
+11. **T10 Remote audio** — bounded low-latency P2 audio.
+12. **T11 Internet sessions** — room codes, endpoint negotiation, NAT traversal/P2P and relay fallback.
+13. **T12 Client save transfer (optional)** — portable client-owned P2 saves with transactional transfer/recovery.
+14. **T13 Latency optimization** — tune scheduling, queues, transport and presentation from telemetry.
+15. **T14 Native NetLink** — optional serial-over-Internet backend after Remote Play is stable.
 
 ## First coding task
 
