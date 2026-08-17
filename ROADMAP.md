@@ -1,0 +1,212 @@
+# SameBoy Link — Roadmap
+
+This roadmap describes the planned development phases for the SameBoy Link fork. The project is experimental and the order may change when measurements or compatibility testing show a better path.
+
+## Project goal
+
+Build a Windows-focused SameBoy fork that makes Game Boy / Game Boy Color Link Cable multiplayer simple locally and over the Internet.
+
+The primary Internet mode is **Remote Play**:
+
+- the host runs both linked SameBoy instances locally;
+- the client sends Player 2 input;
+- the host streams Player 2 video/audio back;
+- only the host needs the ROM;
+- the Game Boy serial link never crosses the Internet.
+
+A later optional **Native NetLink** mode may run one emulator on each PC and transport link/serial timing over the network.
+
+---
+
+## Phase 0 — Reproducible Windows baseline
+
+**Goal:** prove that the current SDL/Windows fork builds and runs before structural changes.
+
+Deliverables:
+
+- reproducible Windows debug build;
+- build notes/toolchain documentation;
+- timing/log instrumentation;
+- no regression in ordinary single-player SameBoy behavior.
+
+**Exit criterion:** an upstream-derived Windows build starts and plays normal GB/GBC ROMs correctly.
+
+---
+
+## Phase 1 — Frontend multi-instance foundation
+
+**Goal:** remove the SDL frontend assumption that exactly one `GB_gameboy_t` exists.
+
+Deliverables:
+
+- `EmulatorSlot` abstraction;
+- `GameSession` abstraction;
+- per-slot framebuffer and persistent data paths;
+- single-player continues to work through slot 0.
+
+**Exit criterion:** one-player behavior is unchanged while the frontend is structurally ready for a second core.
+
+---
+
+## Phase 2 — Local Link MVP
+
+**Goal:** run two SameBoy instances in one Windows process with a real emulated Game Boy link between them.
+
+Deliverables:
+
+- second SameBoy core;
+- local serial bridge based on SameBoy's existing libretro implementation;
+- shared cycle-delta scheduler;
+- independent P1/P2 input;
+- side-by-side local rendering;
+- independent P1/P2 save paths;
+- basic link diagnostics.
+
+**Exit criterion:** known two-player link games establish and maintain a working session for extended play.
+
+---
+
+## Phase 3 — Remote Play LAN prototype
+
+**Goal:** prove the host/client model before adding matchmaking or Internet traversal.
+
+Deliverables:
+
+- client sends complete P2 controller state to host;
+- both emulators remain on host;
+- native P2 framebuffer is streamed to client;
+- client renders/scales locally;
+- P2 audio streaming;
+- latency telemetry across the full pipeline.
+
+**Exit criterion:** two PCs on a LAN can play a link game with the remote player controlling P2 and seeing/hearing P2 output.
+
+---
+
+## Phase 4 — Streaming quality layer
+
+**Goal:** provide good image quality without adding unnecessary latency.
+
+Planned modes:
+
+- **Balanced** — default low-latency native-resolution compression;
+- **Pixel Perfect** — lossless native-resolution transport;
+- **Low Bandwidth** — more aggressive compression for constrained connections.
+
+Client-side presentation remains local so nearest-neighbour scaling, integer scaling, SameBoy color correction and reusable SameBoy shaders/filters can be applied after decode.
+
+Candidate backends include raw/reference transport, fast lossless compression, tile/XOR delta methods, conventional low-latency codecs, and optional GPU hardware encode/decode where measurement shows a benefit.
+
+**Exit criterion:** stream quality is selectable and queues remain bounded without latency growth.
+
+---
+
+## Phase 5 — Internet coordination
+
+**Goal:** remove manual IP/port exchange.
+
+Deliverables:
+
+- coordination service;
+- room/session creation;
+- short room codes;
+- opaque short-lived invite tokens;
+- endpoint exchange;
+- protocol compatibility checks.
+
+**Exit criterion:** host and client can discover each other through a room code without manually entering IP addresses.
+
+---
+
+## Phase 6 — Zero-configuration connectivity
+
+**Goal:** make port forwarding unnecessary in the normal flow.
+
+Connection mechanisms:
+
+- direct IPv6 where available;
+- UDP hole punching / NAT traversal;
+- UPnP IGD;
+- NAT-PMP;
+- PCP;
+- relay fallback.
+
+Direct P2P is preferred for latency and server-bandwidth reasons. Relay exists so restrictive NAT/CGNAT networks still work.
+
+**Exit criterion:** typical users can connect without opening router settings.
+
+---
+
+## Phase 7 — One-click invitations
+
+**Goal:** reduce joining a game to clicking a link.
+
+Deliverables:
+
+- `sameboylink://join/<token>` Windows URL handler;
+- HTTPS share-link form;
+- `Copy Invite Link` UI;
+- automatic app launch/join;
+- secure token parsing and expiry.
+
+Target flow:
+
+```text
+Host Game -> Copy Invite Link -> friend clicks -> SameBoy Link opens -> Connected
+```
+
+**Exit criterion:** no IP, port or room-code typing is required when using an invite link.
+
+---
+
+## Phase 8 — Save portability
+
+**Goal:** allow remote players to bring persistent game saves without requiring a ROM locally.
+
+V1 already keeps distinct P1/P2 save files on the host. This later phase adds optional client-owned P2 save transfer.
+
+Deliverables:
+
+- transactional upload before session;
+- verified download after session;
+- backups and temporary files;
+- cryptographic hash validation;
+- RTC/auxiliary persistent-data support where required;
+- recovery after disconnect.
+
+**Exit criterion:** a remote player can safely bring a Pokémon-style save to a host and receive the updated save back.
+
+---
+
+## Phase 9 — Polish and release engineering
+
+**Goal:** make the project usable beyond development testing.
+
+Deliverables:
+
+- simple Windows multiplayer UI;
+- controller configuration;
+- connection/latency status;
+- developer diagnostics behind an advanced option;
+- packaging/update strategy;
+- compatibility matrix;
+- automated smoke/regression testing.
+
+---
+
+## Phase 10 — Native NetLink (optional/experimental)
+
+**Goal:** investigate one-emulator-per-PC link transport after Remote Play is stable.
+
+This mode requires significantly harder synchronization and compatibility work because Game Boy serial timing must cross the network.
+
+Potential work:
+
+- serial-event transport;
+- adaptive link buffer;
+- clock-drift correction;
+- deterministic snapshots;
+- speculative execution / rollback if justified by measurements;
+- ROM/revision/hash verification on both PCs.
+
+This phase must not complicate or delay the primary Remote Play implementation.
