@@ -16,7 +16,7 @@ endif
 DL_EXT := so
 
 ifeq ($(PLATFORM),windows32)
-_ := $(shell chcp 65001)
+_ := $(shell chcp.com 65001)
 EXESUFFIX:=.exe
 NATIVE_CC = clang -IWindows -Wno-deprecated-declarations --target=x86_64-pc-windows
 SDL_AUDIO_DRIVERS ?= xaudio2 sdl
@@ -294,6 +294,10 @@ CFLAGS += -IWindows -Drandom=rand --target=x86_64-pc-windows
 LDFLAGS += -lmsvcrt -lkernel32 -Wl,/MANIFESTFILE:NUL --target=x86_64-pc-windows
 SDL_LDFLAGS := -lSDL2 -lcomdlg32 -luser32 -lshell32 -lole32 -ladvapi32 -ldwmapi -lwindowscodecs -lSDL2main
 GL_LDFLAGS := -lopengl32 
+ifneq ($(OPUS_ROOT),)
+SDL_CFLAGS += -DENABLE_REMOTE_OPUS -I$(OPUS_ROOT)/include
+SDL_LDFLAGS += $(OPUS_ROOT)/lib/libopus.dll.a
+endif
 ifneq ($(REDIST_XAUDIO),)
 CFLAGS += -DREDIST_XAUDIO
 LDFLAGS += -lxaudio2_9redist
@@ -430,7 +434,7 @@ endif
 
 CORE_SOURCES := $(filter-out $(CORE_FILTER),$(shell ls Core/*.c))
 CORE_HEADERS := $(shell ls Core/*.h)
-SDL_SOURCES := $(shell ls SDL/*.c) $(OPEN_DIALOG) $(SAVE_PNG) $(patsubst %,SDL/audio/%.c,$(SDL_AUDIO_DRIVERS))
+SDL_SOURCES := $(shell ls SDL/*.c) $(shell ls SDL/session/*.c) $(shell ls SDL/remote_play/*.c) $(OPEN_DIALOG) $(SAVE_PNG) $(patsubst %,SDL/audio/%.c,$(SDL_AUDIO_DRIVERS))
 TESTER_SOURCES := $(shell ls Tester/*.c)
 IOS_SOURCES := $(filter-out iOS/installer.m, $(shell ls iOS/*.m)) $(shell ls AppleCommon/*.m)
 COCOA_SOURCES := $(shell ls Cocoa/*.m) $(shell ls HexFiend/*.m) $(shell ls JoyKit/*.m) $(shell ls AppleCommon/*.m)
@@ -688,7 +692,7 @@ endif
 
 $(BIN)/SDL/sameboy.exe: $(CORE_OBJECTS) $(SDL_OBJECTS) $(OBJ)/Windows/resources.o
 	-@$(MKDIR) -p $(dir $@)
-	$(CC) $^ -o $@ $(LDFLAGS) $(SDL_LDFLAGS) $(GL_LDFLAGS) -Wl,/subsystem:windows
+	$(CC) $^ -o $@ $(LDFLAGS) $(SDL_LDFLAGS) $(GL_LDFLAGS) -lws2_32 -Wl,/subsystem:windows
 	
 $(BIN)/SDL/sameboy_debugger.txt:
 	echo Looking for sameboy_debugger.exe? > $@
@@ -728,7 +732,7 @@ ifeq ($(CONF), release)
 	$(CODESIGN) $@
 endif
 
-$(BIN)/tester/sameboy_tester.exe: $(CORE_OBJECTS)
+$(BIN)/tester/sameboy_tester.exe: $(CORE_OBJECTS) $(TESTER_OBJECTS)
 	-@$(MKDIR) -p $(dir $@)
 	$(CC) $^ -o $@ $(LDFLAGS) -Wl,/subsystem:console
 

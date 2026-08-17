@@ -15,6 +15,11 @@
 #include "audio/audio.h"
 #include "console.h"
 #include "save_png/save_png.h"
+#include "link_diagnostics.h"
+#include "session/local_link.h"
+#include "session/multiplayer_input.h"
+#include "remote_play/remote_play_client.h"
+#include "remote_play/remote_play_host.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -22,23 +27,57 @@
 #endif
 
 static bool stop_on_start = false;
-GB_gameboy_t gb;
+GameSession game_session;
+static LocalLink local_link;
+static RemotePlayHost remote_input_host;
+static bool local_link_requested = false;
+static bool remote_host_show_p2 = true;
 static bool paused = false;
-static uint32_t pixel_buffer_1[256 * 224], pixel_buffer_2[256 * 224];
-static uint32_t *active_pixel_buffer = pixel_buffer_1, *previous_pixel_buffer = pixel_buffer_2;
 static bool underclock_down = false, rewind_down = false, do_rewind = false, rewind_paused = false, turbo_down = false;
 static bool rapid_a = false, rapid_b = false;
 static uint8_t rapid_a_count = 0, rapid_b_count = 0;
 static double clock_mutliplier = 1.0;
 static bool pending_screenshot = false;
 
-char *filename = NULL;
-static typeof(free) *free_function = NULL;
-static char *battery_save_path_ptr = NULL;
 static SDL_GLContext gl_context = NULL;
 static bool console_supported = false;
-static bool battery_dirty = false;
-static unsigned battery_timer = 0;
+
+static EmulatorSlot *slot_for_gameboy(GB_gameboy_t *gameboy)
+{
+    EmulatorSlot *slot = game_session_find_slot(&game_session, gameboy);
+    return slot? slot : current_emulator_slot();
+}
+
+static uint64_t frontend_monotonic_time_us(void)
+{
+    uint64_t counter = SDL_GetPerformanceCounter();
+    uint64_t frequency = SDL_GetPerformanceFrequency();
+    return counter / frequency * 1000000 + counter % frequency * 1000000 / frequency;
+}
+
+static void save_active_batteries(void)
+{
+    for (unsigned i = 0; i < game_session.active_slot_count; i++) {
+        EmulatorSlot *slot = &game_session.slots[i];
+        if (GB_is_inited(&slot->gameboy) && slot->battery_save_path) {
+            GB_save_battery(&slot->gameboy, slot->battery_save_path);
+        }
+    }
+}
+
+static void set_session_turbo_mode(bool enabled, bool rewind)
+{
+    for (unsigned i = 0; i < game_session.active_slot_count; i++) {
+        GB_set_turbo_mode(&game_session.slots[i].gameboy, enabled, enabled && rewind);
+    }
+}
+
+static void set_session_clock_multiplier(double multiplier)
+{
+    for (unsigned i = 0; i < game_session.active_slot_count; i++) {
+        GB_set_clock_multiplier(&game_session.slots[i].gameboy, multiplier);
+    }
+}
 
 bool uses_gl(void)
 {
@@ -47,28 +86,27 @@ bool uses_gl(void)
 
 void rerender_screen(void)
 {
-    render_texture(active_pixel_buffer, configuration.blending_mode? previous_pixel_buffer : NULL);
+    EmulatorSlot *slot = current_emulator_slot();
+    uint32_t *pixels = game_session_compose_framebuffers(&game_session);
+    void *previous = game_session.presentation_slot_count == 1 && configuration.blending_mode?
+        slot->previous_pixel_buffer : NULL;
+    render_texture(pixels, previous);
 #ifdef _WIN32
     /* Required for some Windows 10 machines, god knows why */
-    render_texture(active_pixel_buffer, configuration.blending_mode? previous_pixel_buffer : NULL);
+    render_texture(pixels, previous);
 #endif
 }
 
 void set_filename(const char *new_filename, typeof(free) *new_free_function)
 {
-    if (filename && free_function) {
-        free_function(filename);
-    }
-    filename = (char *) new_filename;
-    free_function = new_free_function;
-    GB_rewind_reset(&gb);
+    emulator_slot_set_rom_path(current_emulator_slot(), new_filename, new_free_function);
 }
 
 static char *completer(const char *substring, uintptr_t *context)
 {
-    if (!GB_is_inited(&gb)) return NULL;
+    if (!GB_is_inited(current_gameboy())) return NULL;
     char *temp = strdup(substring);
-    char *ret = GB_debugger_complete_substring(&gb, temp, context);
+    char *ret = GB_debugger_complete_substring(current_gameboy(), temp, context);
     free(temp);
     return ret;
 }
@@ -210,14 +248,14 @@ static void *start_capturing_logs(void)
     void *previous = captured_log;
     captured_log = malloc(1);
     captured_log[0] = 0;
-    GB_set_log_callback(&gb, log_capture_callback);
+    GB_set_log_callback(current_gameboy(), log_capture_callback);
     return previous;
 }
 
 static void end_capturing_logs(bool show_popup, bool should_exit, uint32_t popup_flags, const char *title, void *previous)
 {
     if (!previous) {
-        GB_set_log_callback(&gb, console_supported? log_callback : NULL);
+        GB_set_log_callback(current_gameboy(), console_supported? log_callback : NULL);
     }
     if (captured_log[0] != 0) {
         if (show_popup) {
@@ -233,23 +271,23 @@ static void end_capturing_logs(bool show_popup, bool should_exit, uint32_t popup
 
 static void update_palette(void)
 {
-    GB_set_palette(&gb, current_dmg_palette());
+    GB_set_palette(current_gameboy(), current_dmg_palette());
 }
 
 static void screen_size_changed(bool resize_window)
 {
     SDL_DestroyTexture(texture);
     texture = SDL_CreateTexture(renderer, SDL_GetWindowPixelFormat(window), SDL_TEXTUREACCESS_STREAMING,
-                                GB_get_screen_width(&gb), GB_get_screen_height(&gb));
+                                current_presentation_width(), current_presentation_height());
     
-    SDL_SetWindowMinimumSize(window, GB_get_screen_width(&gb), GB_get_screen_height(&gb));
+    SDL_SetWindowMinimumSize(window, current_presentation_width(), current_presentation_height());
     
     if (resize_window) {
         signed current_window_width, current_window_height;
         SDL_GetWindowSize(window, &current_window_width, &current_window_height);
 
-        signed width = GB_get_screen_width(&gb) * configuration.default_scale;
-        signed height = GB_get_screen_height(&gb) * configuration.default_scale;
+        signed width = current_presentation_width() * configuration.default_scale;
+        signed height = current_presentation_height() * configuration.default_scale;
         signed x, y;
         SDL_GetWindowPosition(window, &x, &y);
         SDL_SetWindowSize(window, width, height);
@@ -265,24 +303,24 @@ static void open_menu(void)
     if (audio_playing) {
         GB_audio_set_paused(true);
     }
-    size_t previous_width = GB_get_screen_width(&gb);
-    size_t previous_height = GB_get_screen_height(&gb);
+    size_t previous_width = GB_get_screen_width(current_gameboy());
+    size_t previous_height = GB_get_screen_height(current_gameboy());
     run_gui(true);
     rerender_screen();
     SDL_ShowCursor(SDL_DISABLE);
     if (audio_playing) {
         GB_audio_set_paused(false);
     }
-    GB_set_color_correction_mode(&gb, configuration.color_correction_mode);
-    GB_set_light_temperature(&gb, (configuration.color_temperature - 10.0) / 10.0);
-    GB_set_interference_volume(&gb, configuration.interference_volume / 100.0);
-    GB_set_border_mode(&gb, configuration.border_mode);
+    GB_set_color_correction_mode(current_gameboy(), configuration.color_correction_mode);
+    GB_set_light_temperature(current_gameboy(), (configuration.color_temperature - 10.0) / 10.0);
+    GB_set_interference_volume(current_gameboy(), configuration.interference_volume / 100.0);
+    GB_set_border_mode(current_gameboy(), configuration.border_mode);
     update_palette();
-    GB_set_highpass_filter_mode(&gb, configuration.highpass_mode);
-    GB_set_rewind_length(&gb, configuration.rewind_length);
-    GB_set_rtc_mode(&gb, configuration.rtc_mode);
-    GB_set_turbo_cap(&gb, configuration.turbo_cap / 4.0);
-    if (previous_width != GB_get_screen_width(&gb)) {
+    GB_set_highpass_filter_mode(current_gameboy(), configuration.highpass_mode);
+    GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
+    GB_set_rtc_mode(current_gameboy(), configuration.rtc_mode);
+    GB_set_turbo_cap(current_gameboy(), configuration.turbo_cap / 4.0);
+    if (previous_width != GB_get_screen_width(current_gameboy())) {
         signed current_window_width, current_window_height;
         SDL_GetWindowSize(window, &current_window_width, &current_window_height);
 
@@ -304,13 +342,15 @@ static void configure_console(void)
     CON_set_async_prompt("> ");
     CON_set_repeat_empty(true);
     CON_set_line_ready_callback(console_line_ready);
-    GB_set_log_callback(&gb, log_callback);
-    GB_set_input_callback(&gb, input_callback);
-    GB_set_async_input_callback(&gb, async_input_callback);
+    GB_set_log_callback(current_gameboy(), log_callback);
+    GB_set_input_callback(current_gameboy(), input_callback);
+    GB_set_async_input_callback(current_gameboy(), async_input_callback);
 }
 
 static void save_screenshot(void)
 {
+    EmulatorSlot *slot = current_emulator_slot();
+    const char *filename = slot->rom_path;
     static char png_path[PATH_MAX] = {0,};
     time_t now = time(NULL);
     struct tm *local = localtime(&now);
@@ -327,7 +367,11 @@ static void save_screenshot(void)
         i++;
     }
     
-    if (save_png(png_path, GB_get_screen_width(&gb), GB_get_screen_height(&gb), active_pixel_buffer, pixel_format)) {
+    if (save_png(png_path,
+                 GB_get_screen_width(&slot->gameboy),
+                 GB_get_screen_height(&slot->gameboy),
+                 slot->active_pixel_buffer,
+                 pixel_format)) {
         show_osd_text("Screenshot saved");
     }
     else {
@@ -411,7 +455,7 @@ static void handle_events(GB_gameboy_t *gb)
                 else if (button == JOYPAD_BUTTON_TURBO) {
                     GB_audio_clear_queue();
                     turbo_down = event.type == SDL_JOYBUTTONDOWN;
-                    GB_set_turbo_mode(gb, turbo_down, turbo_down && rewind_down);
+                    set_session_turbo_mode(turbo_down, rewind_down);
                     SDL_GL_SetSwapInterval(turbo_down? 0 : configuration.vsync_mode);
                 }
                 else if (button == JOYPAD_BUTTON_SLOW_MOTION) {
@@ -422,7 +466,7 @@ static void handle_events(GB_gameboy_t *gb)
                     if (event.type == SDL_JOYBUTTONUP) {
                         rewind_paused = false;
                     }
-                    GB_set_turbo_mode(gb, turbo_down, turbo_down && rewind_down);
+                    set_session_turbo_mode(turbo_down, rewind_down);
                     SDL_GL_SetSwapInterval(turbo_down? 0 : configuration.vsync_mode);
                 }
                 else if (button == JOYPAD_BUTTON_MENU && event.type == SDL_JOYBUTTONDOWN) {
@@ -436,7 +480,7 @@ static void handle_events(GB_gameboy_t *gb)
                         case HOTKEY_PAUSE:
                             paused = !paused;
                             if (paused) {
-                                GB_save_battery(gb, battery_save_path_ptr);
+                                save_active_batteries();
                             }
                             break;
                         case HOTKEY_MUTE:
@@ -555,6 +599,11 @@ static void handle_events(GB_gameboy_t *gb)
             };
                 
             case SDL_KEYDOWN:
+                if (local_link.connected &&
+                    !remote_input_host.active &&
+                    multiplayer_input_handle_keyboard_event(&game_session, &event.key)) {
+                    break;
+                }
                 switch (event_hotkey_code(&event)) {
                     case SDL_SCANCODE_ESCAPE: {
                         open_menu();
@@ -588,7 +637,7 @@ static void handle_events(GB_gameboy_t *gb)
                         if (event.key.keysym.mod & MODIFIER) {
                             paused = !paused;
                             if (paused) {
-                                GB_save_battery(gb, battery_save_path_ptr);
+                                save_active_batteries();
                             }
                         }
                         break;
@@ -601,6 +650,24 @@ static void handle_events(GB_gameboy_t *gb)
                             }
 #endif
                             GB_audio_set_paused(GB_audio_is_playing());
+                        }
+                        break;
+                    case SDL_SCANCODE_F9:
+                        if (remote_input_host.active && local_link.connected &&
+                            !event.key.repeat) {
+                            remote_host_show_p2 = !remote_host_show_p2;
+                            game_session_set_presentation_slot_count(
+                                &game_session,
+                                remote_host_show_p2? 2 : 1);
+                            screen_size_changed(true);
+                            show_osd_text(remote_host_show_p2?
+                                          "Host view: P1 + P2" :
+                                          "Host view: P1 only");
+                            sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
+                                             "host_view=%s hotkey=F9 presentation=%ux%u",
+                                             remote_host_show_p2? "both" : "p1",
+                                             game_session_presentation_width(&game_session),
+                                             game_session_presentation_height(&game_session));
                         }
                         break;
 #ifdef __APPLE__
@@ -658,10 +725,15 @@ static void handle_events(GB_gameboy_t *gb)
                         break;
                 }
             case SDL_KEYUP: // Fallthrough
+                if (local_link.connected &&
+                    !remote_input_host.active &&
+                    multiplayer_input_handle_keyboard_event(&game_session, &event.key)) {
+                    break;
+                }
                 if (event.key.keysym.scancode == configuration.keys[GB_CONF_KEYS_TURBO]) {
                     turbo_down = event.type == SDL_KEYDOWN;
                     GB_audio_clear_queue();
-                    GB_set_turbo_mode(gb, turbo_down, turbo_down && rewind_down);
+                    set_session_turbo_mode(turbo_down, rewind_down);
                     SDL_GL_SetSwapInterval(turbo_down? 0 : configuration.vsync_mode);
                 }
                 else if (event.key.keysym.scancode == configuration.keys_2[GB_CONF_KEYS2_REWIND]) {
@@ -669,7 +741,7 @@ static void handle_events(GB_gameboy_t *gb)
                     if (event.type == SDL_KEYUP) {
                         rewind_paused = false;
                     }
-                    GB_set_turbo_mode(gb, turbo_down, turbo_down && rewind_down);
+                    set_session_turbo_mode(turbo_down, rewind_down);
                     SDL_GL_SetSwapInterval(turbo_down? 0 : configuration.vsync_mode);
                 }
                 else if (event.key.keysym.scancode == configuration.keys_2[GB_CONF_KEYS2_UNDERCLOCK]) {
@@ -707,15 +779,56 @@ static uint32_t rgb_encode(GB_gameboy_t *gb, uint8_t r, uint8_t g, uint8_t b)
     return SDL_MapRGB(pixel_format, r, g, b);
 }
 
+static void update_slot_battery(EmulatorSlot *slot)
+{
+    GB_gameboy_t *gameboy = &slot->gameboy;
+    slot->battery_timer++;
+    if (slot->battery_timer != 15) {
+        return;
+    }
+
+    slot->battery_timer = 0;
+    if (slot->battery_dirty && !GB_get_battery_dirty(gameboy)) {
+        GB_save_battery(gameboy, slot->battery_save_path);
+        GB_log(gameboy, "Saved\n");
+    }
+
+    slot->battery_dirty = GB_get_battery_dirty(gameboy);
+    GB_clear_battery_dirty(gameboy);
+}
+
+static void latch_local_link_frame(EmulatorSlot *slot, GB_vblank_type_t type)
+{
+    if (!local_link.connected || type == GB_VBLANK_TYPE_REPEAT) {
+        return;
+    }
+
+    /* Keep the completed frame immutable while the core renders the next one. */
+    emulator_slot_swap_pixel_buffers(slot);
+    slot->completed_frame_sequence++;
+    slot->completed_frame_timestamp_us = frontend_monotonic_time_us();
+    GB_set_pixels_output(&slot->gameboy, slot->active_pixel_buffer);
+}
+
 static void vblank(GB_gameboy_t *gb, GB_vblank_type_t type)
 {
+    EmulatorSlot *slot = slot_for_gameboy(gb);
+    slot->vblank_occurred = true;
+    if (slot != current_emulator_slot()) {
+        latch_local_link_frame(slot, type);
+        update_slot_battery(slot);
+        return;
+    }
+
+    sameboy_link_diagnostics_vblank(gb, type);
+
     if (underclock_down && clock_mutliplier > 0.5) {
         clock_mutliplier -= 1.0/16;
-        GB_set_clock_multiplier(gb, clock_mutliplier);
+        set_session_clock_multiplier(clock_mutliplier);
     }
     else if (!underclock_down && clock_mutliplier < 1.0) {
         clock_mutliplier += 1.0/16;
-        GB_set_clock_multiplier(gb, clock_mutliplier);
+        set_session_clock_multiplier(clock_mutliplier);
     }
     
     if (rapid_a) {
@@ -746,39 +859,29 @@ static void vblank(GB_gameboy_t *gb, GB_vblank_type_t type)
         if (osd_countdown != 1) {
             unsigned width = GB_get_screen_width(gb);
             unsigned height = GB_get_screen_height(gb);
-            draw_text(active_pixel_buffer,
+            draw_text(slot->active_pixel_buffer,
                       width, height, 8, height - 8 - osd_text_lines * 12, osd_text,
                       rgb_encode(gb, 255, 255, 255), rgb_encode(gb, 0, 0, 0),
                       true);
         }
         osd_countdown--;
     }
-    if (type != GB_VBLANK_TYPE_REPEAT) {
+    if (local_link.connected) {
+        latch_local_link_frame(slot, type);
+    }
+    else if (type != GB_VBLANK_TYPE_REPEAT) {
         if (configuration.blending_mode) {
-            render_texture(active_pixel_buffer, previous_pixel_buffer);
-            uint32_t *temp = active_pixel_buffer;
-            active_pixel_buffer = previous_pixel_buffer;
-            previous_pixel_buffer = temp;
-            GB_set_pixels_output(gb, active_pixel_buffer);
+            render_texture(slot->active_pixel_buffer, slot->previous_pixel_buffer);
+            emulator_slot_swap_pixel_buffers(slot);
+            GB_set_pixels_output(gb, slot->active_pixel_buffer);
         }
         else {
-            render_texture(active_pixel_buffer, NULL);
+            render_texture(slot->active_pixel_buffer, NULL);
         }
     }
     do_rewind = rewind_down;
     
-    battery_timer++;
-    if (battery_timer == 15) {
-        battery_timer = 0;
-        
-        if (battery_dirty && !GB_get_battery_dirty(gb)) {
-            GB_save_battery(gb, battery_save_path_ptr);
-            GB_log(gb, "Saved\n");
-        }
-        
-        battery_dirty = GB_get_battery_dirty(gb);
-        GB_clear_battery_dirty(gb);
-    }
+    update_slot_battery(slot);
     
     handle_events(gb);
 }
@@ -795,10 +898,10 @@ static void rumble(GB_gameboy_t *gb, double amp)
 static void debugger_interrupt(int ignore)
 {
 #ifndef _WIN32
-    if (!GB_is_inited(&gb)) {
+    if (!GB_is_inited(current_gameboy())) {
         exit(0);
     }
-    if (GB_debugger_is_stopped(&gb)) {
+    if (GB_debugger_is_stopped(current_gameboy())) {
         pending_command = GB_SDL_QUIT_COMMAND;
         console_line_ready(); // Force the debugger wait-loop to process the command
         return;
@@ -847,6 +950,19 @@ static void gb_audio_callback(GB_gameboy_t *gb, GB_sample_t *sample)
     
     GB_audio_queue_sample(sample);
     
+}
+
+static void secondary_audio_callback(GB_gameboy_t *gb, GB_sample_t *sample)
+{
+    slot_for_gameboy(gb)->audio_sample_count++;
+    GB_sample_t remote_sample = *sample;
+    if (configuration.volume != 100) {
+        remote_sample.left = remote_sample.left * configuration.volume / 100;
+        remote_sample.right = remote_sample.right * configuration.volume / 100;
+    }
+    remote_play_host_queue_audio_sample(&remote_input_host,
+                                        remote_sample.left,
+                                        remote_sample.right);
 }
 
 #ifdef _WIN32
@@ -921,6 +1037,10 @@ static void initialize_windows_console(void)
 static bool doing_hot_swap = false;
 static bool handle_pending_command(void)
 {
+    EmulatorSlot *slot = current_emulator_slot();
+    GB_gameboy_t *gameboy = &slot->gameboy;
+    const char *filename = slot->rom_path;
+
     switch (pending_command) {
         case GB_SDL_LOAD_STATE_COMMAND:
         case GB_SDL_SAVE_STATE_COMMAND: {
@@ -932,18 +1052,18 @@ static bool handle_pending_command(void)
             void *previous = start_capturing_logs();
             bool success;
             if (pending_command == GB_SDL_LOAD_STATE_COMMAND) {
-                int result = GB_load_state(&gb, save_path);
+                int result = GB_load_state(gameboy, save_path);
                 if (result == ENOENT) {
                     char save_extension[] = ".sn0";
                     save_extension[3] += command_parameter;
                     replace_extension(filename, strlen(filename), save_path, save_extension);
                     start_capturing_logs();
-                    result = GB_load_state(&gb, save_path);
+                    result = GB_load_state(gameboy, save_path);
                 }
                 success = result == 0;
             }
             else {
-                success = GB_save_state(&gb, save_path) == 0;
+                success = GB_save_state(gameboy, save_path) == 0;
             }
             end_capturing_logs(true,
                                false,
@@ -958,7 +1078,7 @@ static bool handle_pending_command(void)
     
         case GB_SDL_LOAD_STATE_FROM_FILE_COMMAND: {
             void *previous = start_capturing_logs();
-            bool success = GB_load_state(&gb, dropped_state_file) == 0;
+            bool success = GB_load_state(gameboy, dropped_state_file) == 0;
             end_capturing_logs(true,
                                false,
                                success? SDL_MESSAGEBOX_INFORMATION : SDL_MESSAGEBOX_ERROR,
@@ -978,23 +1098,23 @@ static bool handle_pending_command(void)
             doing_hot_swap = true;
         case GB_SDL_RESET_COMMAND:
         case GB_SDL_NEW_FILE_COMMAND:
-            GB_save_battery(&gb, battery_save_path_ptr);
+            save_active_batteries();
             return true;
             
         case GB_SDL_QUIT_COMMAND:
-            GB_save_battery(&gb, battery_save_path_ptr);
+            save_active_batteries();
             exit(0);
         case GB_SDL_DEBUGGER_INTERRUPT_COMMAND:
-            if (!GB_is_inited(&gb)) exit(0);
+            if (!GB_is_inited(gameboy)) exit(0);
             
 #ifdef _WIN32
             initialize_windows_console();
 #endif
 
             /* ^C twice to exit */
-            if (GB_debugger_is_stopped(&gb)) {
+            if (GB_debugger_is_stopped(gameboy)) {
 #ifndef _WIN32
-                GB_save_battery(&gb, battery_save_path_ptr);
+                save_active_batteries();
                 exit(0);
 #else
                 break;
@@ -1003,7 +1123,7 @@ static bool handle_pending_command(void)
             if (console_supported) {
                 CON_print("^C\n");
             }
-            GB_debugger_break(&gb);
+            GB_debugger_break(gameboy);
             break;
 #if _WIN32
         case GB_SDL_HIDE_DEBUGGER_COMMAND:
@@ -1068,6 +1188,8 @@ static bool is_path_writeable(const char *path)
 
 static void debugger_reload_callback(GB_gameboy_t *gb)
 {
+    EmulatorSlot *slot = slot_for_gameboy(gb);
+    const char *filename = slot->rom_path;
     size_t path_length = strlen(filename);
     char extension[4] = {0,};
     if (path_length > 4) {
@@ -1084,7 +1206,7 @@ static void debugger_reload_callback(GB_gameboy_t *gb)
         GB_load_rom(gb, filename);
     }
     
-    GB_load_battery(gb, battery_save_path_ptr);
+    GB_load_battery(gb, slot->battery_save_path);
     
     GB_debugger_clear_symbols(gb);
     GB_debugger_load_symbol_file(gb, resource_path("registers.sym"));
@@ -1100,7 +1222,7 @@ static GB_model_t model_to_use(void)
 {
     typeof(configuration.model) gui_model = configuration.model;
     if (gui_model == MODEL_AUTO) {
-        uint8_t *rom = GB_get_direct_access(&gb, GB_DIRECT_ACCESS_ROM, NULL, NULL);
+        uint8_t *rom = GB_get_direct_access(current_gameboy(), GB_DIRECT_ACCESS_ROM, NULL, NULL);
         if (!rom) {
             gui_model = MODEL_CGB;
         }
@@ -1138,67 +1260,128 @@ static GB_model_t model_to_use(void)
     }[gui_model];
 }
 
+static bool initialize_secondary_slot(GB_model_t model, const char *rom_path)
+{
+    EmulatorSlot *slot = &game_session.slots[1];
+    char *owned_rom_path = strdup(rom_path);
+    if (!owned_rom_path) {
+        return false;
+    }
+    emulator_slot_set_rom_path(slot, owned_rom_path, free);
+
+    GB_gameboy_t *gameboy = &slot->gameboy;
+    GB_init(gameboy, model);
+    GB_set_boot_rom_load_callback(gameboy, load_boot_rom);
+    GB_set_vblank_callback(gameboy, (GB_vblank_callback_t)vblank);
+    GB_set_pixels_output(gameboy, slot->active_pixel_buffer);
+    GB_set_rgb_encode_callback(gameboy, rgb_encode);
+    GB_set_sample_rate(gameboy, GB_audio_get_frequency());
+    GB_apu_set_sample_callback(gameboy, secondary_audio_callback);
+    GB_set_color_correction_mode(gameboy, configuration.color_correction_mode);
+    GB_set_light_temperature(gameboy, (configuration.color_temperature - 10.0) / 10.0);
+    GB_set_interference_volume(gameboy, configuration.interference_volume / 100.0);
+    GB_set_palette(gameboy, current_dmg_palette());
+    if ((unsigned)configuration.border_mode <= GB_BORDER_ALWAYS) {
+        GB_set_border_mode(gameboy, configuration.border_mode);
+    }
+    GB_set_highpass_filter_mode(gameboy, configuration.highpass_mode);
+    GB_set_rewind_length(gameboy, configuration.rewind_length);
+    GB_set_rtc_mode(gameboy, configuration.rtc_mode);
+    GB_set_turbo_cap(gameboy, configuration.turbo_cap / 4.0);
+    GB_load_rom(gameboy, rom_path);
+
+    size_t path_length = strlen(rom_path);
+    char battery_save_path[path_length + sizeof(".p2.sav")];
+    replace_extension(rom_path, path_length, battery_save_path, ".p2.sav");
+    if (!emulator_slot_set_battery_save_path(slot, battery_save_path)) {
+        return false;
+    }
+    GB_load_battery(gameboy, slot->battery_save_path);
+
+    game_session.active_slot_count = 2;
+    game_session.presentation_slot_count = 2;
+    sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
+                     "slot=1 framebuffer=%ux%u pitch=%u save_path=%s",
+                     GB_get_screen_width(gameboy),
+                     GB_get_screen_height(gameboy),
+                     GB_get_screen_width(gameboy) * (unsigned)sizeof(uint32_t),
+                     slot->battery_save_path);
+    return true;
+}
+
 static void run(void)
 {
+    EmulatorSlot *slot = current_emulator_slot();
+    GB_gameboy_t *gameboy = &slot->gameboy;
+    const char *filename;
+
     SDL_ShowCursor(SDL_DISABLE);
     GB_model_t model;
     pending_command = GB_SDL_NO_COMMAND;
-restart:;
+    restart:;
+    if (local_link.connected) {
+        local_link_disconnect(&local_link);
+        emulator_slot_deinitialize(&game_session.slots[1]);
+        emulator_slot_initialize(&game_session.slots[1]);
+        game_session.active_slot_count = 1;
+        game_session.presentation_slot_count = 1;
+    }
+    filename = slot->rom_path;
     model = model_to_use();
     bool should_resize = !screen_manually_resized;
     signed current_window_width, current_window_height;
     SDL_GetWindowSize(window, &current_window_width, &current_window_height);
 
     
-    if (GB_is_inited(&gb)) {
+    if (GB_is_inited(gameboy)) {
         should_resize =
-            current_window_width == GB_get_screen_width(&gb) * configuration.default_scale &&
-            current_window_height == GB_get_screen_height(&gb) * configuration.default_scale;
+            current_window_width == GB_get_screen_width(gameboy) * configuration.default_scale &&
+            current_window_height == GB_get_screen_height(gameboy) * configuration.default_scale;
         
         if (doing_hot_swap) {
             doing_hot_swap = false;
         }
         else {
-            GB_switch_model_and_reset(&gb, model);
+            GB_switch_model_and_reset(gameboy, model);
         }
     }
     else {
-        GB_init(&gb, model);
+        GB_init(gameboy, model);
         
-        GB_set_boot_rom_load_callback(&gb, load_boot_rom);
-        GB_set_vblank_callback(&gb, (GB_vblank_callback_t) vblank);
-        GB_set_pixels_output(&gb, active_pixel_buffer);
-        GB_set_rgb_encode_callback(&gb, rgb_encode);
-        GB_set_rumble_callback(&gb, rumble);
-        GB_set_rumble_mode(&gb, configuration.rumble_mode);
-        GB_set_sample_rate(&gb, GB_audio_get_frequency());
-        GB_set_color_correction_mode(&gb, configuration.color_correction_mode);
-        GB_set_light_temperature(&gb, (configuration.color_temperature - 10.0) / 10.0);
-        GB_set_interference_volume(&gb, configuration.interference_volume / 100.0);
+        GB_set_boot_rom_load_callback(gameboy, load_boot_rom);
+        GB_set_vblank_callback(gameboy, (GB_vblank_callback_t) vblank);
+        GB_set_pixels_output(gameboy, slot->active_pixel_buffer);
+        GB_set_rgb_encode_callback(gameboy, rgb_encode);
+        GB_set_rumble_callback(gameboy, rumble);
+        GB_set_rumble_mode(gameboy, configuration.rumble_mode);
+        GB_set_sample_rate(gameboy, GB_audio_get_frequency());
+        GB_set_color_correction_mode(gameboy, configuration.color_correction_mode);
+        GB_set_light_temperature(gameboy, (configuration.color_temperature - 10.0) / 10.0);
+        GB_set_interference_volume(gameboy, configuration.interference_volume / 100.0);
         update_palette();
         if ((unsigned)configuration.border_mode <= GB_BORDER_ALWAYS) {
-            GB_set_border_mode(&gb, configuration.border_mode);
+            GB_set_border_mode(gameboy, configuration.border_mode);
         }
-        GB_set_highpass_filter_mode(&gb, configuration.highpass_mode);
-        GB_set_rewind_length(&gb, configuration.rewind_length);
-        GB_set_rtc_mode(&gb, configuration.rtc_mode);
-        GB_set_turbo_cap(&gb, configuration.turbo_cap / 4.0);
-        GB_set_update_input_hint_callback(&gb, handle_events);
-        GB_apu_set_sample_callback(&gb, gb_audio_callback);
+        GB_set_highpass_filter_mode(gameboy, configuration.highpass_mode);
+        GB_set_rewind_length(gameboy, configuration.rewind_length);
+        GB_set_rtc_mode(gameboy, configuration.rtc_mode);
+        GB_set_turbo_cap(gameboy, configuration.turbo_cap / 4.0);
+        GB_set_update_input_hint_callback(gameboy, handle_events);
+        GB_apu_set_sample_callback(gameboy, gb_audio_callback);
         
         if (console_supported) {
             configure_console();
         }
         
-        GB_debugger_set_reload_callback(&gb, debugger_reload_callback);
+        GB_debugger_set_reload_callback(gameboy, debugger_reload_callback);
     }
     if (stop_on_start) {
         stop_on_start = false;
-        GB_debugger_break(&gb);
+        GB_debugger_break(gameboy);
     }
 
     bool error = false;
-    GB_debugger_clear_symbols(&gb);
+    GB_debugger_clear_symbols(gameboy);
     void *previous = start_capturing_logs();
     size_t path_length = strlen(filename);
     char extension[4] = {0,};
@@ -1210,25 +1393,30 @@ restart:;
         }
     }
     if (strcmp(extension, "isx") == 0) {
-        error = GB_load_isx(&gb, filename);
+        error = GB_load_isx(gameboy, filename);
         /* Configure battery */
         char battery_save_path[path_length + 5]; /* At the worst case, size is strlen(path) + 4 bytes for .sav + NULL */
         replace_extension(filename, path_length, battery_save_path, ".ram");
-        battery_save_path_ptr = battery_save_path;
-        GB_load_battery(&gb, battery_save_path);
+        if (emulator_slot_set_battery_save_path(slot, battery_save_path)) {
+            GB_load_battery(gameboy, slot->battery_save_path);
+        }
+        else {
+            GB_log(gameboy, "Could not allocate the battery save path.\n");
+            error = true;
+        }
     }
     else {
-        GB_load_rom(&gb, filename);
+        GB_load_rom(gameboy, filename);
     }
     GB_model_t updated_model = model_to_use(); // Could change after loading ROM with auto setting
     if (model != updated_model) {
         model = updated_model;
-        GB_switch_model_and_reset(&gb, model);
+        GB_switch_model_and_reset(gameboy, model);
     }
     
     if (should_resize) {
-        signed width = GB_get_screen_width(&gb) * configuration.default_scale;
-        signed height = GB_get_screen_height(&gb) * configuration.default_scale;
+        signed width = GB_get_screen_width(gameboy) * configuration.default_scale;
+        signed height = GB_get_screen_height(gameboy) * configuration.default_scale;
         signed x, y;
         SDL_GetWindowPosition(window, &x, &y);
         SDL_SetWindowSize(window, width, height);
@@ -1238,55 +1426,103 @@ restart:;
     /* Configure battery */
     char battery_save_path[path_length + 5]; /* At the worst case, size is strlen(path) + 4 bytes for .sav + NULL */
     replace_extension(filename, path_length, battery_save_path, ".sav");
-    battery_save_path_ptr = battery_save_path;
-    GB_load_battery(&gb, battery_save_path);
-    if (GB_save_battery_size(&gb)) {
+    if (emulator_slot_set_battery_save_path(slot, battery_save_path)) {
+        GB_load_battery(gameboy, slot->battery_save_path);
+    }
+    else {
+        GB_log(gameboy, "Could not allocate the battery save path.\n");
+        error = true;
+    }
+    if (GB_save_battery_size(gameboy)) {
         if (!is_path_writeable(battery_save_path)) {
-            GB_log(&gb, "The save path for this ROM is not writeable, progress will not be saved.\n");
+            GB_log(gameboy, "The save path for this ROM is not writeable, progress will not be saved.\n");
         }
     }
     
     char cheat_path[path_length + 5];
     replace_extension(filename, path_length, cheat_path, ".cht");
     // Remove all cheats before loading, so they're cleared even if loading fails.
-    GB_remove_all_cheats(&gb);
-    GB_load_cheats(&gb, cheat_path, false);
+    GB_remove_all_cheats(gameboy);
+    GB_load_cheats(gameboy, cheat_path, false);
     
     end_capturing_logs(true, error, SDL_MESSAGEBOX_WARNING, "Warning", previous);
     
     static char start_text[64];
     static char title[17];
-    GB_get_rom_title(&gb, title);
-    sprintf(start_text, "SameBoy v" GB_VERSION "\n%s\n%08X", title, GB_get_rom_crc32(&gb));
+    GB_get_rom_title(gameboy, title);
+    sprintf(start_text, "SameBoy v" GB_VERSION "\n%s\n%08X", title, GB_get_rom_crc32(gameboy));
     show_osd_text(start_text);
 
     /* Configure symbols */
-    GB_debugger_load_symbol_file(&gb, resource_path("registers.sym"));
+    GB_debugger_load_symbol_file(gameboy, resource_path("registers.sym"));
     
     char symbols_path[path_length + 5];
     replace_extension(filename, path_length, symbols_path, ".sym");
-    GB_debugger_load_symbol_file(&gb, symbols_path);
+    GB_debugger_load_symbol_file(gameboy, symbols_path);
+
+    if (local_link_requested) {
+        if (!initialize_secondary_slot(model, filename) || !local_link_connect(&local_link)) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                     "SameBoy Link Error",
+                                     "Could not initialize the second Game Boy instance.",
+                                     window);
+            exit(1);
+        }
+        if (remote_input_host.active && !remote_host_show_p2) {
+            game_session_set_presentation_slot_count(&game_session, 1);
+        }
+        sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
+                         "presentation=%ux%u layout=%s hotkey=F9",
+                         game_session_presentation_width(&game_session),
+                         game_session_presentation_height(&game_session),
+                         game_session.presentation_slot_count == 1?
+                            "p1_only" : "side_by_side");
+    }
         
-    screen_size_changed(false);
+    screen_size_changed(local_link.connected && should_resize);
+    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                     "game_session active_slots=%u primary_slot=0 capacity=%u",
+                     game_session.active_slot_count,
+                     GAME_SESSION_SLOT_CAPACITY);
+    sameboy_link_diagnostics_start(gameboy,
+                                   pixel_format,
+                                   gl_context != NULL,
+                                   GB_audio_driver_name(),
+                                   GB_audio_get_frequency());
 
     /* Run emulation */
     while (true) {
+        remote_play_host_poll(&remote_input_host);
         if (paused || rewind_paused) {
             SDL_WaitEvent(NULL);
-            handle_events(&gb);
+            handle_events(gameboy);
         }
         else {
-            if (do_rewind) {
-                GB_rewind_pop(&gb);
-                if (turbo_down) {
-                    GB_rewind_pop(&gb);
-                }
-                if (!GB_rewind_pop(&gb)) {
-                    rewind_paused = true;
-                }
+            if (local_link.connected) {
                 do_rewind = false;
+                local_link_run_frame(&local_link);
+                remote_play_host_send_pending_audio(&remote_input_host);
+                GameSessionFrame remote_frame;
+                if (game_session_get_completed_frame(&game_session, 1, &remote_frame)) {
+                    remote_play_host_send_completed_frame(&remote_input_host,
+                                                          &remote_frame,
+                                                          pixel_format);
+                }
+                render_texture(game_session_compose_framebuffers(&game_session), NULL);
             }
-            GB_run(&gb);
+            else {
+                if (do_rewind) {
+                    GB_rewind_pop(gameboy);
+                    if (turbo_down) {
+                        GB_rewind_pop(gameboy);
+                    }
+                    if (!GB_rewind_pop(gameboy)) {
+                        rewind_paused = true;
+                    }
+                    do_rewind = false;
+                }
+                GB_run(gameboy);
+            }
         }
         
         /* These commands can't run in the handle_event function, because they're not safe in a vblank context. */
@@ -1311,7 +1547,14 @@ static void save_configuration(void)
 
 static void stop_recording(void)
 {
-    GB_stop_audio_recording(&gb);
+    GB_stop_audio_recording(current_gameboy());
+}
+
+static void deinitialize_game_session(void)
+{
+    remote_play_host_stop(&remote_input_host);
+    local_link_disconnect(&local_link);
+    game_session_deinitialize(&game_session);
 }
 
 static bool get_arg_flag(const char *flag, int *argc, char **argv)
@@ -1337,6 +1580,39 @@ static const char *get_arg_option(const char *option, int *argc, char **argv)
         }
     }
     return NULL;
+}
+
+static bool parse_unsigned_option(const char *string,
+                                  uint32_t minimum,
+                                  uint32_t maximum,
+                                  uint32_t *value)
+{
+    if (!string || !string[0] || string[0] == '-') {
+        return false;
+    }
+
+    errno = 0;
+    char *end;
+    unsigned long parsed = strtoul(string, &end, 10);
+    if (errno || *end || parsed < minimum || parsed > maximum) {
+        return false;
+    }
+    *value = parsed;
+    return true;
+}
+
+static void print_usage(const char *program)
+{
+    fprintf(stderr, "SameBoy v" GB_VERSION "\n");
+    fprintf(stderr,
+            "Usage: %s [--fullscreen|-f] [--nogl] [--local-link] "
+            "[--remote-input-host <port>] [--remote-session <id>] "
+            "[--remote-audio <pcm|opus>] [--remote-host-view <p1|both>] "
+            "[--stop-debugger|-s] [--model <model>] <rom>\n",
+            program);
+    fprintf(stderr,
+            "       %s --remote-input-client <host:port> [--remote-session <id>]\n",
+            program);
 }
 
 #ifdef __APPLE__
@@ -1449,20 +1725,95 @@ int main(int argc, char **argv)
     enable_smooth_scrolling();
 #endif
 
+    game_session_initialize(&game_session);
+    local_link_initialize(&local_link, &game_session);
+
     const char *model_string = get_arg_option("--model", &argc, argv);
+    const char *remote_host_port_string = get_arg_option("--remote-input-host", &argc, argv);
+    const char *remote_client_endpoint = get_arg_option("--remote-input-client", &argc, argv);
+    const char *remote_session_string = get_arg_option("--remote-session", &argc, argv);
+    const char *remote_audio_string = get_arg_option("--remote-audio", &argc, argv);
+    const char *remote_host_view_string = get_arg_option("--remote-host-view", &argc, argv);
     bool fullscreen = get_arg_flag("--fullscreen", &argc, argv) || get_arg_flag("-f", &argc, argv);
     bool nogl = get_arg_flag("--nogl", &argc, argv);
     stop_on_start = get_arg_flag("--stop-debugger", &argc, argv) || get_arg_flag("-s", &argc, argv);
-    
+    local_link_requested = get_arg_flag("--local-link", &argc, argv) || remote_host_port_string;
+
+    uint32_t remote_session_id = 1;
+    if (remote_session_string &&
+        !parse_unsigned_option(remote_session_string, 1, UINT32_MAX, &remote_session_id)) {
+        fprintf(stderr, "Invalid remote session ID: %s\n", remote_session_string);
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    uint8_t remote_audio_codec = REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE;
+    if (remote_audio_string) {
+        if (strcmp(remote_audio_string, "pcm") == 0) {
+            remote_audio_codec = REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE;
+        }
+        else if (strcmp(remote_audio_string, "opus") == 0) {
+            remote_audio_codec = REMOTE_PLAY_AUDIO_CODEC_OPUS;
+        }
+        else {
+            fprintf(stderr, "Invalid remote audio codec: %s (use pcm or opus)\n",
+                    remote_audio_string);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (remote_host_view_string) {
+        if (strcmp(remote_host_view_string, "p1") == 0) {
+            remote_host_show_p2 = false;
+        }
+        else if (strcmp(remote_host_view_string, "both") == 0) {
+            remote_host_show_p2 = true;
+        }
+        else {
+            fprintf(stderr,
+                    "Invalid remote host view: %s (use p1 or both)\n",
+                    remote_host_view_string);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (remote_client_endpoint) {
+        if (remote_host_port_string || remote_audio_string ||
+            remote_host_view_string || argc != 1) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        return remote_play_client_run(remote_client_endpoint, remote_session_id);
+    }
+
+    uint32_t remote_host_port = 0;
+    if (remote_host_port_string &&
+        (!parse_unsigned_option(remote_host_port_string, 1, UINT16_MAX, &remote_host_port) ||
+         argc != 2)) {
+        fprintf(stderr, "Remote input host requires a valid UDP port and one ROM.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (remote_audio_string && !remote_host_port_string) {
+        fprintf(stderr, "Remote audio selection requires --remote-input-host.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (remote_host_view_string && !remote_host_port_string) {
+        fprintf(stderr, "Remote host view selection requires --remote-input-host.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
 
     if (argc > 2 || (argc == 2 && argv[1][0] == '-')) {
-        fprintf(stderr, "SameBoy v" GB_VERSION "\n");
-        fprintf(stderr, "Usage: %s [--fullscreen|-f] [--nogl] [--stop-debugger|-s] [--model <model>] <rom>\n", argv[0]);
-        exit(1);
+        print_usage(argv[0]);
+        return 1;
     }
     
     if (argc == 2) {
-        filename = argv[1];
+        current_emulator_slot()->rom_path = argv[1];
     }
 
     signal(SIGINT, debugger_interrupt);
@@ -1476,6 +1827,21 @@ int main(int argc, char **argv)
     // This is, essentially, best-effort.
     // This function will not be called if the process is terminated in any way, anyhow.
     atexit(SDL_Quit);
+    atexit(deinitialize_game_session);
+
+    if (remote_host_port) {
+        char error[128];
+        if (!remote_play_host_start(&remote_input_host,
+                                    &game_session,
+                                    remote_host_port,
+                                    remote_session_id,
+                                    error,
+                                    sizeof(error))) {
+            fprintf(stderr, "Could not start remote input host: %s\n", error);
+            exit(1);
+        }
+        remote_play_host_set_audio_codec(&remote_input_host, remote_audio_codec);
+    }
 
     if ((console_supported = CON_start(completer))) {
         CON_set_repeat_empty(true);
@@ -1592,6 +1958,7 @@ int main(int argc, char **argv)
     }
     
     GB_audio_init();
+    remote_play_host_set_audio_sample_rate(&remote_input_host, GB_audio_get_frequency());
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
     
@@ -1632,7 +1999,7 @@ int main(int argc, char **argv)
     
     SDL_GL_SetSwapInterval(configuration.vsync_mode);
     
-    if (filename == NULL) {
+    if (current_emulator_slot()->rom_path == NULL) {
         stop_on_start = false;
         run_gui(false);
     }

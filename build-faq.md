@@ -9,9 +9,62 @@ SameBoy on macOS expects you to have SDL2 installed via Brew, and not as a frame
 
 # Windows Build Process
 
-## Tools and Libraries Installation
+## Quick build
 
-For the various tools and libraries, follow the below guide to ensure easy, proper configuration for the build environment:
+From PowerShell in the repository root:
+
+```powershell
+.\build-windows.ps1
+```
+
+The script locates the installed build tools, configures the Visual Studio x64
+developer environment, and builds the SDL frontend in debug mode. The result is
+written to `build\bin\SDL\sameboy.exe`.
+
+Useful options:
+
+```powershell
+# Remove previous build output before building
+.\build-windows.ps1 -Clean
+
+# Make an optimized release build
+.\build-windows.ps1 -Configuration release
+
+# Build all Windows-compatible targets
+.\build-windows.ps1 -Target all
+
+# Use SDL2 from a non-default location
+.\build-windows.ps1 -SdlRoot D:\Libraries\SDL2
+
+# Use an Opus installation from a non-default location
+.\build-windows.ps1 -OpusRoot D:\Libraries\msys64\mingw64
+```
+
+Build a PCM-only executable without compiling or linking Opus support:
+
+```powershell
+.\build-windows.ps1 -DisableOpus -Clean
+```
+
+This build does not require or deploy `libopus-0.dll`. The remote host uses PCM
+by default; `--remote-audio opus` is unavailable in this executable.
+
+`SAMEBOY_SDL2_ROOT` and `SAMEBOY_OPUS_ROOT` may be used instead of the matching
+parameters. The defaults are `C:\SDL2` and `C:\msys64\mingw64`.
+
+## Prerequisites
+
+The script checks these prerequisites and reports a specific missing tool or
+file before starting the build:
+
+- Visual Studio 2022 C++ Build Tools and a Windows SDK;
+- LLVM/Clang with LLD;
+- GNU Make and the standard MSYS command-line tools;
+- RGBDS (`rgbasm`, `rgblink`, `rgbfix`, and `rgbgfx`);
+- the SDL2 Visual C++ development package;
+- MSYS2's 64-bit Opus package (`pacman -S mingw-w64-x86_64-opus`).
+
+## Manual setup
 
 ### SDL2
 
@@ -22,15 +75,15 @@ The following examples will be referenced later:
 - `C:\SDL2\lib\x64\*`
 - `C:\SDL2\include\*`
 
-### rgbds
+### RGBDS
 
 After downloading [rgbds](https://github.com/gbdev/rgbds/releases/), ensure that it is added to the `%PATH%`. This may be done by adding it to the user's or SYSTEM's Environment Variables, or may be added to the command line at compilation time via `set path=%path%;C:\path\to\rgbds`.  
 
-### Git Bash & Make
+### MSYS and Make
 
 Ensure that the `Git\usr\bin` directory is included in `%PATH%`. Like rgbds above, this may instead be manually included on the command line before installation: `set path=%path%;C:\path\to\Git\usr\bin`. Similarly, make sure that the directory containing `make.exe` is also included.
 
-## Building
+## Manual build
 
 Within a command prompt in the project directory:
 
@@ -42,3 +95,121 @@ make
 ```
 On some versions of Visual Studio, you might need to use `vcvarsx86_amd64` instead of `vcvars64`. Please note that these directories (`C:\SDL2\*`) are the examples given within the "SDL Port" section above. Ensure that your `%PATH%` properly includes `rgbds` and `Git\usr\bin`, and that the `lib` and `include` paths include the appropriate SDL2 directories.
 
+## SameBoy Link runtime diagnostics
+
+The SDL frontend writes a small SameBoy Link diagnostic block to standard error
+when a ROM session starts. It records the renderer and native framebuffer format,
+the selected audio driver and sample rate, and both nominal and measured frame
+cadence. The cadence measurement uses the first 120 normal frames and is emitted
+once per ROM session.
+
+To capture the diagnostics from PowerShell:
+
+```powershell
+$process = Start-Process `
+    -FilePath .\build\bin\SDL\sameboy.exe `
+    -ArgumentList 'C:\path\to\game.gb' `
+    -RedirectStandardError .\build\sameboy-link.log `
+    -PassThru
+$process.WaitForExit()
+```
+
+Each line is prefixed with a category such as `[SameBoy Link][video]`,
+`[SameBoy Link][audio]`, or `[SameBoy Link][timing]`, so later link and latency
+diagnostics can use the same log stream without changing the emulator core.
+
+## Local Link developer mode
+
+The current developer interface exposes Local Link through a command-line option.
+It starts two cores with the same ROM and shows their native framebuffers side by
+side:
+
+```powershell
+.\build\bin\SDL\sameboy.exe --local-link "C:\path\to\link-game.gb"
+```
+
+Use arrow keys, X, Z, Enter and Backspace for Player 1. Use W/A/S/D, K, J, I
+and U for Player 2. Player 2's battery save is written beside the ROM with the
+suffix `.p2.sav`; it never shares Player 1's `.sav` path.
+
+The mode is intended for development testing. There is not yet a Local Link
+menu, controller assignment UI, mixed P2 audio, or a completed compatibility
+matrix.
+
+## LAN remote-input developer mode
+
+Start the host with a UDP port and a non-zero development session ID. This also
+enables the two-core Local Link mode:
+
+```powershell
+.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 "C:\path\to\link-game.gb"
+```
+
+The host shows both native screens by default. To start with only P1 visible on
+the host while P2 continues to run and stream normally, add
+`--remote-host-view p1`. Use `--remote-host-view both` for the explicit
+side-by-side mode. Press `F9` during netplay to switch the host view immediately;
+this does not pause, hide or disconnect P2 on the remote computer.
+
+On the Player 2 PC, replace the address with the host's LAN IPv4 address:
+
+```powershell
+.\build\bin\SDL\sameboy.exe --remote-input-client 192.168.1.10:45900 --remote-session 424242
+```
+
+For a one-PC loopback test, use `127.0.0.1:45900`. Focus the remote P2 window
+and use the same keyboard layout as P1: arrow keys, X, Z, Enter and Backspace.
+The dedicated Local Link P2 layout (W/A/S/D, K, J, I and U) remains available
+as an alternative. Local Link on one keyboard still keeps the two layouts
+separate. The remote window is freely resizable and preserves the native screen
+aspect ratio with centered letterboxing or pillarboxing.
+
+This direct-IP mode is development-only and currently has no authentication or
+encryption, so it should only be used on a trusted LAN. The client now displays
+the host's native P2 framebuffer and plays its P2 audio automatically. Protocol
+version 4 uses lossless pixel RLE by default and falls back to raw RGBA8 for any
+frame that would grow. Tetris DX measured roughly 14–22% of the raw video size
+(about 6–10 Mbit/s rather than 44 Mbit/s). Remote audio defaults to the
+uncompressed 48 kHz stereo 16-bit PCM reference (approximately 1.54 Mbit/s), or
+the host can select Opus Restricted Low Delay:
+
+```powershell
+.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 --remote-audio opus "C:\path\to\link-game.gb"
+```
+
+Both modes use 5 ms packets and the same adaptive jitter buffer. The client title
+shows smoothed RTT, clock-synchronization uncertainty, latest input-to-present
+latency, jitter, dropped video frames and queued audio milliseconds. Detailed
+stage timings are written under `[SameBoy Link][timing]`.
+
+## Temporary direct Internet test
+
+The current direct-IP protocol can be tested manually over the Internet, but it
+is not a public-release transport. It has no peer authentication or encryption.
+Anyone able to reach the forwarded UDP port can send traffic to it, and P2
+video/audio is not confidential. Use a fresh session ID, open only one test port,
+close the host afterward and remove the router forwarding rule immediately.
+
+On the host router, forward one UDP port to the host PC's private IPv4 address
+using the same internal and external port. Then start the host, for example:
+
+```powershell
+.\build\bin\SDL\sameboy.exe --remote-input-host 45930 --remote-session 123456789 --remote-host-view p1 "C:\path\to\link-game.gb"
+```
+
+The client connects to the router's public IPv4 address and forwarded port:
+
+```powershell
+.\sameboy.exe --remote-input-client PUBLIC_IP:45930 --remote-session 123456789
+```
+
+Run the client from a genuinely different Internet connection. A client on the
+same LAN may fail when using the public address if the router lacks NAT loopback;
+that does not prove the forwarding is broken. If the router's reported WAN
+address differs from the public address, the connection may be behind CGNAT and
+manual forwarding will not work without a VPN, public IPv6, traversal or relay.
+
+The first manual public-IPv4 test completed roughly five minutes of play with
+18,590 video frames, 62,188 PCM packets and zero host-side send drops. This is a
+development proof only; it does not change the authentication/encryption warning
+or make permanent port forwarding safe.

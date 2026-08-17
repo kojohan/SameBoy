@@ -51,7 +51,7 @@ void render_texture(void *pixels,  void *previous)
 {
     if (renderer) {
         if (pixels) {
-            SDL_UpdateTexture(texture, NULL, pixels, GB_get_screen_width(&gb) * sizeof (uint32_t));
+            SDL_UpdateTexture(texture, NULL, pixels, current_presentation_width() * sizeof (uint32_t));
         }
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
@@ -65,15 +65,15 @@ void render_texture(void *pixels,  void *previous)
             mode = GB_FRAME_BLENDING_MODE_DISABLED;
         }
         else if (mode == GB_FRAME_BLENDING_MODE_ACCURATE) {
-            if (GB_is_sgb(&gb)) {
+            if (GB_is_sgb(current_gameboy())) {
                 mode = GB_FRAME_BLENDING_MODE_SIMPLE;
             }
             else {
-                mode = GB_is_odd_frame(&gb)? GB_FRAME_BLENDING_MODE_ACCURATE_ODD : GB_FRAME_BLENDING_MODE_ACCURATE_EVEN;
+                mode = GB_is_odd_frame(current_gameboy())? GB_FRAME_BLENDING_MODE_ACCURATE_ODD : GB_FRAME_BLENDING_MODE_ACCURATE_EVEN;
             }
         }
         render_bitmap_with_shader(&shader, pixels, previous,
-                                  GB_get_screen_width(&gb), GB_get_screen_height(&gb),
+                                  current_presentation_width(), current_presentation_height(),
                                   rect.x, rect.y, rect.w, rect.h,
                                   mode);
         SDL_GL_SwapWindow(window);
@@ -119,8 +119,8 @@ void update_viewport(void)
     SDL_GetWindowSize(window, &logical_width, &logical_height);
     factor = win_width / logical_width;
     
-    double x_factor = win_width / (double) GB_get_screen_width(&gb);
-    double y_factor = win_height / (double) GB_get_screen_height(&gb);
+    double x_factor = win_width / (double)current_presentation_width();
+    double y_factor = win_height / (double)current_presentation_height();
     
     if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR) {
         x_factor = (unsigned)(x_factor);
@@ -136,8 +136,8 @@ void update_viewport(void)
         }
     }
     
-    unsigned new_width = x_factor * GB_get_screen_width(&gb);
-    unsigned new_height = y_factor * GB_get_screen_height(&gb);
+    unsigned new_width = x_factor * current_presentation_width();
+    unsigned new_height = y_factor * current_presentation_height();
     
     rect = (SDL_Rect){(win_width  - new_width) / 2, (win_height - new_height) /2,
         new_width, new_height};
@@ -152,7 +152,7 @@ void update_viewport(void)
 
 static void rescale_window(void)
 {
-    SDL_SetWindowSize(window, GB_get_screen_width(&gb) * configuration.default_scale, GB_get_screen_height(&gb) * configuration.default_scale);
+    SDL_SetWindowSize(window, current_presentation_width() * configuration.default_scale, current_presentation_height() * configuration.default_scale);
 }
 
 static void draw_char(uint32_t *buffer, unsigned width, unsigned height, unsigned char ch, uint32_t color, uint32_t *mask_top, uint32_t *mask_bottom)
@@ -192,7 +192,7 @@ static void draw_unbordered_text(uint32_t *buffer, unsigned width, unsigned heig
         y -= scroll;
     }
     unsigned orig_x = x;
-    unsigned y_offset = is_osd? 0 : (GB_get_screen_height(&gb) - 144) / 2;
+    unsigned y_offset = is_osd? 0 : (GB_get_screen_height(current_gameboy()) - 144) / 2;
     while (*string) {
         if (*string == '\n') {
             x = orig_x;
@@ -205,7 +205,7 @@ static void draw_unbordered_text(uint32_t *buffer, unsigned width, unsigned heig
             break;
         }
         
-        draw_char(&buffer[(signed)(x + width * y)], width, height, *string, color, &buffer[width * y_offset], &buffer[width * (is_osd? GB_get_screen_height(&gb) : y_offset + 144)]);
+        draw_char(&buffer[(signed)(x + width * y)], width, height, *string, color, &buffer[width * y_offset], &buffer[width * (is_osd? GB_get_screen_height(current_gameboy()) : y_offset + 144)]);
         x += GLYPH_WIDTH;
         string++;
     }
@@ -455,11 +455,11 @@ extern struct menu_item modify_cheat_menu[];
 
 static void save_cheats(void)
 {
-    extern char *filename;
-    size_t path_length = strlen(filename);
+    const char *rom_path = current_emulator_slot()->rom_path;
+    size_t path_length = strlen(rom_path);
     char cheat_path[path_length + 5];
-    replace_extension(filename, path_length, cheat_path, ".cht");
-    GB_save_cheats(&gb, cheat_path);
+    replace_extension(rom_path, path_length, cheat_path, ".cht");
+    GB_save_cheats(current_gameboy(), cheat_path);
 }
 
 static void rename_callback(char ch)
@@ -469,7 +469,7 @@ static void rename_callback(char ch)
         return;
     }
     if (ch == '\n') {
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         text_input,
                         current_cheat->address,
@@ -501,7 +501,7 @@ static void rename_cheat(unsigned index)
     gui_state = TEXT_INPUT;
     text_input_callback = rename_callback;
     SDL_StartTextInput();
-    GB_update_cheat(&gb,
+    GB_update_cheat(current_gameboy(),
                     current_cheat,
                     current_cheat->description,
                     current_cheat->address,
@@ -516,7 +516,7 @@ static void rename_cheat(unsigned index)
 
 static void toggle_cheat(unsigned index)
 {
-    GB_update_cheat(&gb,
+    GB_update_cheat(current_gameboy(),
                     current_cheat,
                     current_cheat->description,
                     current_cheat->address,
@@ -577,7 +577,7 @@ static void change_cheat_address_callback(char ch)
             s++;
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         address,
@@ -662,7 +662,7 @@ static void change_cheat_value_callback(char ch)
             s++;
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         current_cheat->address,
@@ -740,7 +740,7 @@ static void change_cheat_old_value_callback(char ch)
             }
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         current_cheat->address,
@@ -784,7 +784,7 @@ static void enter_cheats_menu(unsigned index);
 
 static void delete_cheat(unsigned index)
 {
-    GB_remove_cheat(&gb, current_cheat);
+    GB_remove_cheat(current_gameboy(), current_cheat);
     save_cheats();
     enter_cheats_menu(0);
 }
@@ -802,12 +802,12 @@ struct menu_item modify_cheat_menu[] = {
 
 static void toggle_cheats(unsigned index)
 {
-    GB_set_cheats_enabled(&gb, !GB_cheats_enabled(&gb));
+    GB_set_cheats_enabled(current_gameboy(), !GB_cheats_enabled(current_gameboy()));
 }
 
 static void add_cheat(unsigned index)
 {
-    current_cheat = GB_add_cheat(&gb, "New Cheat", 0, 0, 0, 0, false, true);
+    current_cheat = GB_add_cheat(current_gameboy(), "New Cheat", 0, 0, 0, 0, false, true);
     modify_cheat_menu[0].string = current_cheat->description;
     current_menu = modify_cheat_menu;
     current_selection = 0;
@@ -829,7 +829,7 @@ static void import_cheat_callback(char ch)
             return;
         }
         
-        current_cheat = GB_import_cheat(&gb, text_input, "Imported Cheat", true);
+        current_cheat = GB_import_cheat(current_gameboy(), text_input, "Imported Cheat", true);
         if (current_cheat) {
             gui_state = SHOWING_MENU;
             modify_cheat_menu[0].string = current_cheat->description;
@@ -876,7 +876,7 @@ static void import_cheat(unsigned index)
 
 static void modify_cheat(unsigned index)
 {
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, NULL);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), NULL);
     current_cheat = cheats[index - 3];
     modify_cheat_menu[0].string = current_cheat->description;
     current_menu = modify_cheat_menu;
@@ -886,13 +886,13 @@ static void modify_cheat(unsigned index)
 
 static const char *checkbox_for_cheat(unsigned index)
 {
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, NULL);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), NULL);
     return cheats[index - 3]->enabled? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
 }
 
 static const char *cheats_global_checkbox(unsigned index)
 {
-    return GB_cheats_enabled(&gb)? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
+    return GB_cheats_enabled(current_gameboy())? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
 }
 
 static void enter_cheats_menu(unsigned index)
@@ -902,7 +902,7 @@ static void enter_cheats_menu(unsigned index)
         free(cheats_menu);
     }
     size_t cheat_count;
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, &cheat_count);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), &cheat_count);
     cheats_menu = calloc(cheat_count + 5, sizeof(struct menu_item));
     cheats_menu[0] = (struct menu_item){"New Cheat", add_cheat};
     cheats_menu[1] = (struct menu_item){"Import Cheat", import_cheat};
@@ -1074,12 +1074,12 @@ static void cycle_rewind(unsigned index)
     for (unsigned i = 0; i < sizeof(rewind_lengths) / sizeof(rewind_lengths[0]) - 1; i++) {
         if (configuration.rewind_length == rewind_lengths[i]) {
             configuration.rewind_length = rewind_lengths[i + 1];
-            GB_set_rewind_length(&gb, configuration.rewind_length);
+            GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
             return;
         }
     }
     configuration.rewind_length = rewind_lengths[0];
-    GB_set_rewind_length(&gb, configuration.rewind_length);
+    GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
 }
 
 static void cycle_rewind_backwards(unsigned index)
@@ -1087,12 +1087,12 @@ static void cycle_rewind_backwards(unsigned index)
     for (unsigned i = 1; i < sizeof(rewind_lengths) / sizeof(rewind_lengths[0]); i++) {
         if (configuration.rewind_length == rewind_lengths[i]) {
             configuration.rewind_length = rewind_lengths[i - 1];
-            GB_set_rewind_length(&gb, configuration.rewind_length);
+            GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
             return;
         }
     }
     configuration.rewind_length = rewind_lengths[sizeof(rewind_lengths) / sizeof(rewind_lengths[0]) - 1];
-    GB_set_rewind_length(&gb, configuration.rewind_length);
+    GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
 }
 
 static const char *current_rewind_string(unsigned index)
@@ -2268,7 +2268,7 @@ static void enter_controls_menu(unsigned index)
 
 static void toggle_audio_recording(unsigned index)
 {
-    if (!GB_is_inited(&gb)) {
+    if (!GB_is_inited(current_gameboy())) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Cannot start audio recording, open a ROM file first.", window);
         return;
     }
@@ -2276,7 +2276,7 @@ static void toggle_audio_recording(unsigned index)
     if (is_recording) {
         is_recording = false;
         show_osd_text("Audio recording ended");
-        int error = GB_stop_audio_recording(&gb);
+        int error = GB_stop_audio_recording(current_gameboy());
         if (error) {
             char *message = NULL;
             asprintf(&message, "Could not finalize recording: %s", strerror(error));
@@ -2287,7 +2287,7 @@ static void toggle_audio_recording(unsigned index)
         memcpy(audio_recording_menu_item, item_string, sizeof(item_string));
         return;
     }
-    char *filename = do_save_recording_dialog(GB_get_sample_rate(&gb));
+    char *filename = do_save_recording_dialog(GB_get_sample_rate(current_gameboy()));
     
     /* Drop events as it SDL seems to catch several in-dialog events */
     SDL_Event event;
@@ -2313,7 +2313,7 @@ static void toggle_audio_recording(unsigned index)
             }
         }
         
-        int error = GB_start_audio_recording(&gb, filename, format);
+        int error = GB_start_audio_recording(current_gameboy(), filename, format);
         free(filename);
         if (error) {
             char *message = NULL;
@@ -2332,8 +2332,8 @@ static void toggle_audio_recording(unsigned index)
 
 void convert_mouse_coordinates(signed *x, signed *y)
 {
-    signed width = GB_get_screen_width(&gb);
-    signed height = GB_get_screen_height(&gb);
+    signed width = GB_get_screen_width(current_gameboy());
+    signed height = GB_get_screen_height(current_gameboy());
     signed x_offset = (width - 160) / 2;
     signed y_offset = (height - 144) / 2;
 
@@ -2387,8 +2387,8 @@ void run_gui(bool is_running)
         }
     }
 
-    unsigned width = GB_get_screen_width(&gb);
-    unsigned height = GB_get_screen_height(&gb);
+    unsigned width = GB_get_screen_width(current_gameboy());
+    unsigned height = GB_get_screen_height(current_gameboy());
     unsigned x_offset = (width - 160) / 2;
     unsigned y_offset = (height - 144) / 2;
     uint32_t pixels[width * height];
@@ -2617,7 +2617,7 @@ void run_gui(bool is_running)
             }
             case SDL_DROPFILE: {
                 if (GB_is_save_state(event.drop.file)) {
-                    if (GB_is_inited(&gb)) {
+                    if (GB_is_inited(current_gameboy())) {
                         dropped_state_file = event.drop.file;
                         pending_command = GB_SDL_LOAD_STATE_FROM_FILE_COMMAND;
                     }

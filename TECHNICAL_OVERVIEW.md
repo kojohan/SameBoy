@@ -2,6 +2,10 @@
 
 This document is the high-level technical introduction for contributors. For the detailed implementation sequence, see `SAMEBOY_LINK_TECHNICAL_PLAN.md`.
 
+## Current snapshot — 2026-08-17
+
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, and a protocol-v4 Remote Play implementation. LAN and direct public-IPv4 play have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. The client has a dedicated network thread, latency telemetry and aspect-correct resizing; the host can hide the local Player 2 view. Shader reuse, video pacing/compression, authentication, encryption and production-grade Internet connectivity remain planned work.
+
 ## 1. Why SameBoy
 
 SameBoy already provides highly accurate Game Boy / Game Boy Color emulation and exposes the serial primitives required for link-cable emulation. Its libretro frontend already demonstrates a working two-core local link implementation.
@@ -72,7 +76,7 @@ The initial local-link implementation should adapt that proven path rather than 
 
 ## 4. SDL frontend refactor
 
-Current SDL SameBoy is largely organized around one global emulator instance. The fork introduces:
+Upstream SDL SameBoy is largely organized around one global emulator instance. This fork now implements:
 
 ```text
 GameSession
@@ -90,7 +94,7 @@ GameSession
            +-- input state
 ```
 
-The first refactor must preserve normal one-player SameBoy behavior before activating slot 1.
+Normal one-player SameBoy behavior was regression-tested before slot 1 and Local Link were activated.
 
 ## 5. Local link scheduling
 
@@ -166,11 +170,11 @@ SameBoy/SDL rendering path
 
 For ordinary DMG/CGB gameplay the native image is typically 160x144. At 32 bits per pixel a raw frame is only 92,160 bytes, so we can prioritize latency and image integrity rather than extreme compression ratio.
 
-Planned quality modes:
+Current and planned quality modes:
 
-- **Balanced** — default;
-- **Pixel Perfect** — lossless native framebuffer;
-- **Low Bandwidth** — more aggressive compression.
+- **Lossless reference** — implemented using native-framebuffer pixel RLE;
+- **Balanced** — planned default after video-pacing and codec measurements;
+- **Low Bandwidth** — planned more aggressive compression.
 
 GPU hardware encode/decode may be used where benchmarks show a real end-to-end benefit, but it is not assumed to be faster for such a small source.
 
@@ -179,6 +183,8 @@ GPU hardware encode/decode may be used where benchmarks show a real end-to-end b
 Keep audio identifiable per emulator core.
 
 Host local audio can select/mix P1 and P2. Remote Play normally sends the P2 stream to the client using small blocks and a deliberately bounded jitter buffer.
+
+Protocol v4 currently sends uncompressed 48 kHz stereo PCM with an adaptive jitter buffer. Physical LAN and Internet testing found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default.
 
 A large audio buffer must never silently become the dominant latency source.
 
@@ -208,6 +214,8 @@ Portable transfer must be transactional: backup, temporary file, cryptographic h
 ## 10. Internet connectivity
 
 The user-facing target is zero manual network configuration.
+
+The current prototype has proven direct UDP play over the public Internet using manual public-IP entry and UDP port forwarding. That is a development test path only; it is not the intended user experience and does not yet provide session authentication or encryption.
 
 Connection establishment may combine:
 
@@ -305,7 +313,7 @@ Before public Internet release:
 - never let an invite URL execute arbitrary commands;
 - do not deserialize arbitrary remote SameBoy save-state blobs in Remote Play mode.
 
-## 14. Source layout target
+## 14. Current source layout
 
 ```text
 SDL/
@@ -320,10 +328,10 @@ SDL/
     remote_play_client.c/.h
     protocol.c/.h
     transport_udp.c/.h
-    video_encoder.c/.h
-    video_decoder.c/.h
-    audio_stream.c/.h
+    video_codec.c/.h
     latency_stats.c/.h
+
+  link_diagnostics.c/.h
 
   native_netlink/
     ... later experimental backend ...

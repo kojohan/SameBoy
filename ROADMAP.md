@@ -20,6 +20,8 @@ A later optional **Native NetLink** mode may run one emulator on each PC and tra
 
 ## Phase 0 — Reproducible Windows baseline
 
+**Status:** Complete (2026-08-17).
+
 **Goal:** prove that the current SDL/Windows fork builds and runs before structural changes.
 
 Deliverables:
@@ -35,6 +37,8 @@ Deliverables:
 
 ## Phase 1 — Frontend multi-instance foundation
 
+**Status:** Complete (2026-08-17).
+
 **Goal:** remove the SDL frontend assumption that exactly one `GB_gameboy_t` exists.
 
 Deliverables:
@@ -49,6 +53,8 @@ Deliverables:
 ---
 
 ## Phase 2 — Local Link MVP
+
+**Status:** Complete (2026-08-17).
 
 **Goal:** run two SameBoy instances in one Windows process with a real emulated Game Boy link between them.
 
@@ -68,6 +74,8 @@ Deliverables:
 
 ## Phase 3 — Remote Play LAN prototype
 
+**Status:** Complete (the two-PC LAN playability criterion and full-pipeline latency measurement were both verified on 2026-08-17 with an Ethernet host and Wi-Fi client).
+
 **Goal:** prove the host/client model before adding matchmaking or Internet traversal.
 
 Deliverables:
@@ -85,11 +93,13 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Opus was tested and deferred; client resizing and independent P1-only host presentation are complete. The current transport also passed a five-minute manual public-IPv4 test; Internet-oriented video pacing/compression remains).
+
 **Goal:** provide good image quality without adding unnecessary latency.
 
 Planned modes:
 
-- **Balanced** — default low-latency native-resolution compression;
+- **Balanced** — implemented first pass using lossless pixel RLE with automatic raw fallback;
 - **Pixel Perfect** — lossless native-resolution transport;
 - **Low Bandwidth** — more aggressive compression for constrained connections.
 

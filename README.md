@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: planning / early implementation. The architecture and milestones are documented; the multiplayer frontend is not yet a finished release.
+> Status: Phase 0 through Phase 3 are complete. Remote Play is playable and measured between an Ethernet host and Wi-Fi client, and a five-minute manual public-IPv4/UDP port-forwarding test has succeeded. PCM is the current stable audio baseline; Phase 4 now focuses on Internet-oriented video transport. Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -71,6 +71,8 @@ Start here depending on what you want to know:
 
 - **[ROADMAP.md](ROADMAP.md)** — clear phase-by-phase development plan and exit criteria.
 - **[TODO.md](TODO.md)** — actionable development checklist.
+- **[DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)** — completed work, measurements and regression evidence.
+- **[build-faq.md](build-faq.md)** — Windows prerequisites and the one-command build script.
 - **[TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md)** — contributor-friendly architecture overview.
 - **[SAMEBOY_LINK_TECHNICAL_PLAN.md](SAMEBOY_LINK_TECHNICAL_PLAN.md)** — detailed implementation decisions and technical notes.
 - **[SAMEBOY_LINK_PLAN.md](SAMEBOY_LINK_PLAN.md)** — product/feature planning notes.
@@ -78,16 +80,16 @@ Start here depending on what you want to know:
 
 ## Current implementation priority
 
-The immediate development order is:
+The completed foundation now includes the reproducible Windows build, dual-core
+Local Link, measured LAN Remote Play, adaptive PCM audio, a dedicated client
+network thread, a resizable P2 window and a P1-only host view. The immediate
+development order is now:
 
-1. establish a reproducible Windows SDL build;
-2. refactor the one-core SDL frontend into `EmulatorSlot` / `GameSession` abstractions without changing single-player behavior;
-3. create a second SameBoy core;
-4. port the proven local link implementation from `libretro/libretro.c`;
-5. add independent P1/P2 input, rendering and save paths;
-6. prove Remote Play input + native framebuffer streaming on LAN;
-7. add Internet coordination, zero-config connectivity and invite links;
-8. optimize latency based on measurements.
+1. optimize and pace video traffic for Internet links;
+2. add authenticated and encrypted realtime sessions;
+3. add Internet coordination, NAT traversal and relay fallback;
+4. add polished host/join, controller, shader and quality-selection UI;
+5. optimize latency based on physical Internet measurements.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.
 

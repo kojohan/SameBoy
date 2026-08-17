@@ -2,6 +2,12 @@
 
 A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy Color Link Cable multiplayer.
 
+## Implementation checkpoint — 2026-08-17
+
+The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. Protocol v4 now provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread, latency telemetry, a resizable Player 2 window and an independent Player 1-only host view. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
+
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The next implementation work is client-side reuse of SameBoy's shader/filter pipeline, improved video pacing and compression, followed by authenticated/encrypted sessions and zero-configuration Internet connectivity.
+
 ## Product direction
 
 Internet multiplayer will be implemented in two modes, in this order:
@@ -355,10 +361,17 @@ Simple multiplayer UI, controller setup, packaging and compatibility documentati
 ### M8 — Native NetLink prototype
 Optional one-emulator-per-PC Link Cable networking after the Remote Play path is stable.
 
-## First implementation task
+## Historical first implementation task — complete
 
-The first coding task remains deliberately narrow:
+The original first coding task was deliberately narrow:
 
 > Identify SameBoy's existing serial/link API and the current local/libretro link implementation, then create the smallest Windows-side experiment that runs two cores and connects them locally.
 
 After Local Link works, the next Internet-specific task is **remote Player 2 input**, not Link Cable networking and not video streaming. This lets us validate the control path before adding media complexity.
+
+## Next implementation tasks
+
+1. Reuse SameBoy's shader/filter pipeline in the Remote Play client.
+2. Improve video pacing and evaluate low-latency compression without regressing the lossless reference path.
+3. Add session authentication and encryption before treating direct Internet play as a public feature.
+4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

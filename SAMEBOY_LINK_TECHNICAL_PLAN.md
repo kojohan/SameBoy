@@ -2,6 +2,12 @@
 
 This document translates the product roadmap into concrete implementation work against the current SameBoy codebase.
 
+## Current implementation status — 2026-08-17
+
+T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. The protocol-v4 prototype runs both linked cores on the host, transports full-state Player 2 input over UDP, streams lossless native framebuffers, and sends adaptive-jitter-buffered 48 kHz stereo PCM from Player 2. The client uses a dedicated high-priority network thread, exposes latency telemetry, and presents a resizable aspect-correct window; the host can switch between a Player 1-only view and both local screens. Local, LAN and direct public-IPv4 tests have passed with Tetris and Tetris DX.
+
+Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. Remaining near-term work is shader/filter reuse and video pacing/compression. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
+
 ## Core architectural decisions
 
 - Keep SameBoy `Core/` as close to upstream as practical.
@@ -15,7 +21,7 @@ This document translates the product roadmap into concrete implementation work a
 
 SameBoy exposes the serial primitives needed for a two-core link through `Core/gb.h`, `Core/gb.c`, `Core/timing.c` and `Core/memory.c`. `libretro/libretro.c` is the working local-link reference with two `GB_gameboy_t` instances, separate framebuffers/input/audio, cross-connected serial callbacks, and a cycle-delta scheduler.
 
-The Windows SDL frontend is currently centered on one global core, so the primary refactor is per-emulator slots plus a session manager rather than changes to serial emulation in `Core/`.
+The upstream Windows SDL frontend was centered on one global core. This fork now implements per-emulator slots and a session manager without changing the serial emulation model in `Core/`.
 
 ## Remote Play architecture
 
@@ -237,6 +243,13 @@ Instrument controller event, input send/receive/application, P2 frame completion
 16. **T15 Latency optimization** — tune scheduling/queues/transport/presentation.
 17. **T16 Native NetLink** — optional serial-over-Internet backend after Remote Play is stable.
 
-## First coding task
+## Historical first coding task — complete
 
 Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping one active slot and preserving normal SameBoy behavior. Only after that builds and behaves identically should Core B and LocalLink be enabled.
+
+## Next coding tasks
+
+1. Route decoded Remote Play frames through the existing SDL shader/filter presentation path.
+2. Add explicit video pacing and measure queue age, drops and end-to-end latency before selecting another codec.
+3. Authenticate and encrypt protocol-v4 sessions.
+4. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

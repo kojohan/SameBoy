@@ -5,6 +5,7 @@
 #include <stdbool.h> 
 #include "shader.h"
 #include "configuration.h"
+#include "session/game_session.h"
 
 #define JOYSTICK_HIGH 0x4000
 #define JOYSTICK_LOW 0x3800
@@ -15,7 +16,27 @@
 #define MODIFIER KMOD_CTRL
 #endif
 
-extern GB_gameboy_t gb;
+extern GameSession game_session;
+
+static inline EmulatorSlot *current_emulator_slot(void)
+{
+    return game_session_primary_slot(&game_session);
+}
+
+static inline GB_gameboy_t *current_gameboy(void)
+{
+    return game_session_primary_core(&game_session);
+}
+
+static inline unsigned current_presentation_width(void)
+{
+    return game_session_presentation_width(&game_session);
+}
+
+static inline unsigned current_presentation_height(void)
+{
+    return game_session_presentation_height(&game_session);
+}
 
 extern SDL_Window *window;
 extern SDL_Renderer *renderer;
