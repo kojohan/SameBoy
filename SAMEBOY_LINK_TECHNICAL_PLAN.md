@@ -6,15 +6,16 @@ This document translates the product roadmap into concrete implementation work a
 
 - Keep SameBoy `Core/` as close to upstream as practical.
 - Remote Play is the primary Internet multiplayer mode: both linked Game Boys execute on the host.
-- Native NetLink (one emulator on each PC with serial traffic over the Internet) is a later optional backend.
-- The remote video source is Player 2's native completed SameBoy framebuffer, not a capture of the host window.
-- The network stream remains at native Game Boy resolution whenever practical. Scaling and presentation filters belong on the client.
+- Native NetLink is a later optional backend.
+- The remote video source is Player 2's native completed SameBoy framebuffer, not host-window capture.
+- Scaling and presentation filters belong on the client.
+- Internet multiplayer should require no manual IP/port entry or router configuration in the normal user flow.
 
 ## Codebase findings
 
-SameBoy exposes the serial primitives needed for a two-core link through `Core/gb.h`, `Core/gb.c`, `Core/timing.c` and `Core/memory.c`. `libretro/libretro.c` already provides the working reference for local multiplayer: two `GB_gameboy_t` instances, separate framebuffers/input/audio, cross-connected serial callbacks, and a cycle-delta scheduler.
+SameBoy exposes the serial primitives needed for a two-core link through `Core/gb.h`, `Core/gb.c`, `Core/timing.c` and `Core/memory.c`. `libretro/libretro.c` is the working local-link reference with two `GB_gameboy_t` instances, separate framebuffers/input/audio, cross-connected serial callbacks, and a cycle-delta scheduler.
 
-The Windows SDL frontend (`SDL/main.c`) is currently centered on one global `GB_gameboy_t gb`, so the main frontend refactor is to introduce per-emulator slots and a session manager rather than modify serial emulation in the core.
+The Windows SDL frontend is currently centered on one global core, so the primary refactor is per-emulator slots plus a session manager rather than changes to serial emulation in `Core/`.
 
 ## Remote Play architecture
 
@@ -37,75 +38,35 @@ network ---------------------------------> decoder
                                       SameBoy/SDL renderer
                                                |
                                       local scaling/filter
-                                               |
-                                            display
 ```
 
-The Game Boy link itself never crosses the Internet in Remote Play mode. Only P2 input travels toward the host; P2 video/audio travels back to the client.
+Only the host requires the ROM in Remote Play mode. The client is a controller plus video/audio receiver and does not need to match ROM region/revision/hash.
 
-## Native-resolution video rule
+## Native-resolution video and quality
 
-Do not stream an already enlarged desktop/window image. The source should normally remain the native Game Boy framebuffer, typically 160x144 for DMG/CGB gameplay. A 32-bit 160x144 frame is 92,160 bytes uncompressed, roughly 5.25 MiB/s / 44 Mbit/s at ~59.7 fps before compression.
+Normally stream the native Game Boy framebuffer (typically 160x144), not an enlarged desktop image. A 32-bit 160x144 frame is 92,160 bytes uncompressed, roughly 5.25 MiB/s / 44 Mbit/s at ~59.7 fps before compression.
 
-The client reconstructs the native framebuffer and performs presentation locally. This preserves:
+Client-side rendering preserves nearest-neighbour/integer scaling, SameBoy color correction/palettes and reusable SDL/OpenGL shaders/filters.
 
-- nearest-neighbour scaling
-- integer scaling (2x, 3x, 4x, etc.)
-- SameBoy color correction/palette handling where reusable
-- SameBoy SDL/OpenGL shaders and display filters where reusable
-- LCD/CRT/ghosting effects
-- client-specific visual preferences independent of the host
+Quality presets:
 
-A useful correctness test for a lossless mode is that the host P2 native framebuffer and reconstructed client framebuffer are bit-identical before client-side scaling/filtering.
+- **Balanced (default):** fast lightweight native-resolution compression, lossless where practical.
+- **Pixel Perfect:** lossless; reconstructed client framebuffer should be bit-identical to host P2 before filtering/scaling.
+- **Low Bandwidth:** more aggressive compression but still decoded/presented as native-resolution source.
 
-## Video quality modes
-
-Do not over-engineer the first release, but expose a codec/transport abstraction capable of quality presets.
-
-### Balanced — default
-
-Native-resolution stream with fast lightweight compression chosen for low latency. Prefer lossless when measured bandwidth is reasonable; near-lossless is acceptable if it materially improves constrained links without visibly damaging pixel art.
-
-Goals: native 160x144 source, ~59.7 fps, client-side scaling/filtering, bounded queue depth, latency prioritized over maximum compression ratio.
-
-### Pixel Perfect
-
-Lossless native-resolution transport. The reconstructed client framebuffer must match the host framebuffer exactly before rendering filters. It may use more bandwidth but should produce the same nearest-neighbour/integer-scaled pixels as local rendering.
-
-### Low Bandwidth
-
-More aggressive compression for weak or metered connections. It may use a conventional low-latency video codec or another lossy representation, but decoded output is still treated as a native-resolution source by the client renderer rather than streaming a pre-scaled desktop image.
-
-Quality modes affect only transport/encoding, never Game Boy emulation or link timing.
-
-## Codec strategy
-
-Do not hard-wire the architecture to H.264/H.265/AV1 initially. Traditional codecs may add RGB/YUV conversion, chroma subsampling, buffering and frame dependencies undesirable for pixel art.
-
-Benchmark behind a common encoder interface:
-
-1. raw framebuffer transport for LAN/reference testing
-2. fast lossless frame compression
-3. changed-region/tile or XOR-delta plus fast compression
-4. conventional low-latency codec for Low Bandwidth mode
-
-For delta modes, periodically send/recover a complete reference frame and immediately recover after packet loss. Dropping obsolete video frames is preferable to allowing latency queues to grow.
+Benchmark raw framebuffer, fast lossless, changed-region/tile or XOR-delta compression, and conventional hardware/software low-latency codecs behind a common encoder interface. GPU hardware encode/decode may be an optional backend where measurement shows lower total latency or CPU use; do not assume GPU is faster for such a small source.
 
 ## Local link and scheduler
 
-Introduce `EmulatorSlot` objects and a `GameSession`. Port libretro's proven serial callback bridge into `LocalLink`. Both cores initially execute on one scheduler thread using the libretro cycle-delta strategy; do not use independent emulator threads for local serial execution.
+Introduce `EmulatorSlot` and `GameSession`. Port libretro's proven serial callback bridge into `LocalLink`. Initially execute both cores on one scheduler thread using the cycle-delta strategy; do not use independent emulator threads for serial execution.
 
 ## Remote input
 
-Send full current button state rather than key-down/key-up deltas. Each packet contains protocol/session ID, sequence number, button mask and client timestamp. Newer state supersedes older state. UDP is appropriate for the realtime prototype.
+Send complete current P2 button state with protocol/session ID, sequence number and timestamp. Newer packets supersede older ones. UDP is appropriate for realtime input.
 
 ## Remote Play save-file handling
 
-Remote Play runs both Game Boy instances on the host. Therefore the host is the authoritative owner of active emulator state and battery-backed save data during a session. The client does not need a ROM or active emulator save in the initial Remote Play implementation.
-
-### V1: host-owned P1 and P2 saves
-
-Each `EmulatorSlot` must have its own save path. Never allow both linked cores to read/write the same `.sav` file.
+Both active Game Boys run on the host, so the host owns active emulator state during Remote Play. P1 and P2 must always use distinct persistent save paths even when both cores load the same ROM.
 
 Example:
 
@@ -114,101 +75,167 @@ Pokemon Crystal [P1].sav
 Pokemon Crystal [P2].sav
 ```
 
-or an equivalent session/profile directory layout.
+V1 keeps both saves on the host. A later client-owned portable P2-save feature may reliably upload a save before the session and return the updated save afterward without requiring a ROM or emulator on the client.
 
-This is required for games such as Pokémon where both linked systems represent independent cartridges/trainers and may save independently.
+Portable save transfer must be transactional: temporary files, previous-save backup, size/hash verification (e.g. SHA-256), promotion only after successful verification, controlled save directories, reliable transfer channel, and recovery after disconnect. Design persistent storage as a per-slot bundle so RTC/auxiliary cartridge data can be supported in addition to a plain `.sav`.
 
-Rules:
+Native NetLink is different: each PC runs its own emulator and normally owns its own save locally.
 
-- P1 and P2 always use distinct battery-save files.
-- The same ROM may be loaded into both cores, but save paths remain separate.
-- Writes must use SameBoy's normal battery-save semantics per core.
-- A crash or disconnect must not cause P1 and P2 save paths to alias or overwrite one another.
-- The host should preserve P2's save for future sessions unless the user explicitly deletes/replaces it.
+## Zero-configuration Internet connectivity
 
-### Future: client-owned portable P2 save
+Normal users should never need to find a public IP address, choose a port, or manually configure port forwarding.
 
-A later feature may allow the remote player to bring a personal `.sav` without requiring a ROM or local emulation.
+Connection establishment should try several mechanisms automatically and report only a simple result such as `Direct` or `Relay` to the user.
 
-Session start:
+Recommended strategy:
 
 ```text
-CLIENT P2.sav
-      |
-secure/reliable file transfer
-      v
-HOST temporary P2 save
-      |
-SameBoy Core B
+1. Exchange candidate endpoints through coordination server
+2. Try direct IPv6 where available
+3. Try UDP NAT traversal / hole punching
+4. Try automatic router mapping where useful:
+   - UPnP IGD
+   - NAT-PMP
+   - PCP
+5. Fall back to relay if direct connection cannot be established
 ```
 
-Session end:
+The exact ordering may be adjusted after real-world testing. These methods may also be attempted in parallel when that reduces connection time safely.
+
+UPnP is not sufficient by itself because it may be disabled/unsupported and cannot solve every CGNAT, double-NAT, hotel, enterprise or mobile-network configuration. Relay fallback is therefore required for a reliable consumer-facing experience.
+
+Direct P2P is preferred because video traffic is much larger than input traffic and direct transport minimizes both server bandwidth and latency.
+
+## Coordination server
+
+The coordination service does not emulate Game Boy hardware. It manages short-lived session metadata needed to bring peers together:
+
+- create/join room
+- opaque room/session token
+- protocol/application compatibility
+- endpoint candidates (IPv4/IPv6)
+- NAT traversal coordination
+- relay credentials/endpoint when required
+- session expiry and teardown
+
+Do not place the host ROM, raw save path, or unnecessary personal/network information into invite URLs.
+
+## Room codes and invite links
+
+Support both manual short room codes and one-click invite links.
+
+Example user flow:
 
 ```text
-SameBoy Core B saves
+HOST
+Create Online Game
       |
-HOST finalized P2.sav
-      |
-verified transfer
       v
-CLIENT replaces local copy only after validation
+Coordination server creates session
+      |
+      +--> Room code: K7M4Q
+      |
+      +--> Copy Invite Link
 ```
 
-The client save is therefore a portable data file, not a second live emulator state.
+The invite should carry an opaque, short-lived session token, not the host's raw IP address/port.
 
-### Save-transfer safety
+### Custom application URL
 
-Client-owned save transfer must be transactional:
+Register a Windows URL protocol handler such as:
 
-1. Keep the client's previous save as a backup.
-2. Transfer into a temporary file on the host/client rather than overwriting the destination directly.
-3. Record file size and a cryptographic hash (for example SHA-256) before/after transfer.
-4. Only promote the temporary file to the active `.sav` after the transfer and hash verify successfully.
-5. If the session or network fails, retain the last known-good save.
-6. Never accept arbitrary paths from the peer; save files must remain inside a controlled profile/session directory.
-7. Save transfer uses a reliable channel and is separate from realtime UDP input/video traffic.
+```text
+sameboylink://join/<opaque-session-token>
+```
 
-### Disconnect policy
+Clicking the link launches/focuses SameBoy Link, parses the join token, contacts the coordination server, resolves the current session, and automatically begins connection establishment.
 
-For V1, a remote disconnect does not delete P2's host save. The host continues to own the last safely flushed P2 save.
+### HTTPS share link
 
-For future client-owned saves, an unexpected disconnect should preserve the updated host-side temporary/backup state and allow explicit recovery/resume rather than silently replacing either side's last known-good copy.
+Also support a normal shareable HTTPS form such as:
 
-### RTC and auxiliary cartridge data
+```text
+https://<project-domain>/join/<opaque-session-token>
+```
 
-Some games may persist more than a single plain `.sav` payload (for example RTC-related cartridge state). The save manager should therefore be designed around a per-slot persistent-data bundle rather than assuming every game is exactly one `.sav` forever. V1 may expose `.sav` first, but the API should leave room for SameBoy-supported RTC/auxiliary persistent files.
+This is preferable for Discord/chat/email because ordinary HTTPS links are widely recognized. The landing page can attempt to open the registered `sameboylink://` handler and otherwise provide an `Open in SameBoy Link` action and installation information.
 
-### Native NetLink distinction
+The concrete public domain is intentionally not fixed in the code plan until a domain is selected.
 
-This save policy applies to Remote Play. In future Native NetLink mode, each PC runs its own emulator and therefore normally owns its own local ROM and save data independently. Save files should not be synchronized automatically in Native NetLink mode.
+### Invite-token requirements
+
+Invite/session tokens should:
+
+- be cryptographically random/unguessable rather than sequential IDs
+- be opaque to clients
+- expire automatically
+- become invalid when the room/session is closed
+- resolve server-side to current endpoint/relay/session metadata
+- not expose IP addresses, ports, save filenames, filesystem paths, ROM paths or authentication secrets directly in the URL
+- be scoped to joining a session rather than granting broad account/server authority
+
+The coordination service can therefore change the host's effective endpoint, NAT candidate or relay path without invalidating the invite link while the session remains active.
+
+## Automatic join flow
+
+```text
+User clicks invite
+      |
+Windows opens SameBoy Link
+      |
+Client extracts opaque token
+      |
+HTTPS/TLS request to coordination service
+      |
+Validate token + protocol compatibility
+      |
+Receive session connection candidates
+      |
+Try direct/hole-punch/router mapping as appropriate
+      |
+Relay fallback if required
+      |
+Connected
+      |
+P2 input -> host
+P2 video/audio <- host
+```
+
+No IP address or port is presented to the user in the normal flow.
+
+## Security notes for URL handling
+
+Treat custom URLs as untrusted input. Enforce strict scheme/path/token parsing and maximum lengths. Never allow URL parameters to become arbitrary filesystem paths or command-line execution. Do not automatically load arbitrary local ROM/save files from an invite URL. Require the server token to resolve to a valid live session before connecting.
+
+The coordination API should use authenticated/encrypted transport (TLS). Realtime P2P/relay traffic should also gain session authentication and encryption before public Internet release.
 
 ## Audio
 
-Keep per-core audio separate. Host local output may select P1/P2/mix; Remote Play normally sends P2 audio. Use small blocks and deliberately small jitter buffers.
+Keep per-core audio separate. Host local output may select P1/P2/mix; Remote Play normally sends P2 audio. Use small blocks and deliberately bounded jitter buffers.
 
 ## Latency telemetry
 
-Instrument timestamps for client controller event, input send/host receive/application, P2 frame completion, encode, video send/receive, decode, texture upload and presentation request.
-
-Initial engineering targets on typical modern PCs are under ~1 ms host emulator processing per produced dual-core frame where hardware permits, under ~1 ms encode, under ~1 ms decode, and roughly 1–3 ms local streaming-pipeline processing excluding network/frame/display waiting. These are measurement targets, not correctness assumptions.
+Instrument controller event, input send/receive/application, P2 frame completion, encode, video send/receive, decode, texture upload and presentation request. Initial targets are roughly under 1 ms each for host emulation processing, encode and decode where hardware permits, with total local streaming processing around 1–3 ms excluding network/frame/display waits. These are measurement targets, not correctness assumptions.
 
 ## Implementation order
 
-1. **T0 Windows baseline** — reproducible SDL build and timing instrumentation.
-2. **T1 EmulatorSlot** — remove one-core frontend assumption while preserving single-player behavior.
-3. **T2 LocalLink** — create Core B and port libretro serial bridge.
-4. **T3 Dual scheduler** — cycle-delta scheduling and long-running link stability.
-5. **T4 Multiplayer input** — separate P1/P2 controller ownership.
-6. **T5 Dual presentation** — side-by-side local rendering and separate audio/framebuffer access.
-7. **T6 Save isolation** — guaranteed independent P1/P2 persistent save paths before Internet sessions.
-8. **T7 Remote input** — direct-IP/LAN P2 controller packets; both cores still run on host.
-9. **T8 Raw/native video reference** — stream native P2 framebuffer on LAN and measure latency.
-10. **T9 Quality/codec layer** — Balanced, Pixel Perfect and Low Bandwidth; client-side SameBoy rendering/filter paths where practical.
+1. **T0 Windows baseline** — reproducible SDL build and instrumentation.
+2. **T1 EmulatorSlot** — remove one-core frontend assumption.
+3. **T2 LocalLink** — second core + libretro serial bridge.
+4. **T3 Dual scheduler** — cycle-delta synchronization.
+5. **T4 Multiplayer input** — separate P1/P2 ownership.
+6. **T5 Dual presentation** — local dual video/audio.
+7. **T6 Save isolation** — independent P1/P2 persistent data.
+8. **T7 Remote input** — direct-IP/LAN prototype.
+9. **T8 Raw/native video reference** — LAN framebuffer stream and latency measurement.
+10. **T9 Quality/codec layer** — Balanced/Pixel Perfect/Low Bandwidth and optional hardware codecs.
 11. **T10 Remote audio** — bounded low-latency P2 audio.
-12. **T11 Internet sessions** — room codes, endpoint negotiation, NAT traversal/P2P and relay fallback.
-13. **T12 Client save transfer (optional)** — portable client-owned P2 saves with transactional transfer/recovery.
-14. **T13 Latency optimization** — tune scheduling, queues, transport and presentation from telemetry.
-15. **T14 Native NetLink** — optional serial-over-Internet backend after Remote Play is stable.
+12. **T11 Coordination service** — room/session tokens and endpoint exchange.
+13. **T12 Zero-config connectivity** — IPv6/direct UDP hole punching + UPnP/NAT-PMP/PCP + relay fallback.
+14. **T13 Invite links** — room codes, `sameboylink://` Windows handler and HTTPS share links.
+15. **T14 Client save transfer (optional)** — portable transactional P2 saves.
+16. **T15 Latency optimization** — tune scheduling/queues/transport/presentation.
+17. **T16 Native NetLink** — optional serial-over-Internet backend after Remote Play is stable.
 
 ## First coding task
 
