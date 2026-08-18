@@ -94,10 +94,10 @@ to the Local Link MVP in phase 2.
 
 ## 2026-08-17 — Phase 2 runnable developer slice
 
-The SDL frontend can now start two SameBoy cores in one process with the
-temporary `--local-link` command-line option. This developer mode loads the same
-ROM into both slots so the serial implementation, scheduler and frontend can be
-validated before a finished Local Link menu is added.
+At this checkpoint, the SDL frontend could start two SameBoy cores in one
+process with the temporary `--local-link` command-line option. That developer
+mode loaded the same ROM into both slots so the serial implementation, scheduler
+and frontend could be validated before the finished Local Link menu was added.
 
 ### Implemented
 
@@ -495,9 +495,9 @@ The debug build succeeds with Opus disabled. Automated protocol-v4 loopback
 regressions completed with zero video drops, rejected frames, audio drops,
 underflows, trims or decode errors. The client-menu regression verified that
 Escape leaves the stream process alive and that Disconnect stops the network
-thread and returns that process to the `SameBoy v1.0.3` start window. Physical
-verification of the new menu-driven Host/Join path remains before the four-mode
-GUI/session milestone is signed off.
+thread and returns that process to the `SameBoy v1.0.3` start window. At this
+checkpoint, physical verification of the new menu-driven Host/Join path remained
+before the four-mode GUI/session milestone could be signed off.
 
 ### One-PC four-mode regression
 
@@ -522,9 +522,9 @@ The user confirmed working P2 video, audio, input, the Remote Client Escape menu
 and clean Disconnect behavior. The host recorded 12,296 P1 and 56 P2 serial
 bits during teardown.
 
-This completes the local regression coverage but does not close the milestone:
-the same menu-driven Host/Join flow still needs to be repeated on two physical
-PCs when the second machine is available.
+This completed the local regression coverage but did not close the milestone at
+that checkpoint: the same menu-driven Host/Join flow still needed to be repeated
+on two physical PCs.
 
 ### Full Remote Client shader/filter reuse
 
@@ -550,5 +550,109 @@ The explicit `--nogl` loopback selected `remote_client_presentation=SDL` and
 received at least 480 video frames without drops or rejections plus more than
 1,800 PCM packets without drops, stale packets or underflows. Post-change smoke
 tests also kept ordinary single-player and Local Link running without logged
-errors. The remaining four-mode milestone item is still the two-physical-PC
-Host/Join test.
+errors. At that checkpoint, the remaining four-mode milestone item was the
+two-physical-PC Host/Join test.
+
+The temporary row of eight P2 button-state indicators has been removed from
+both the OpenGL and SDL Remote Client presentation paths. Input collection,
+network transmission and latency telemetry remain active, but the gameplay
+window now contains only the streamed framebuffer and its configured
+letterbox/pillarbox background.
+
+### Automated Windows smoke regression
+
+`test-windows-link.ps1` now turns the established one-PC developer paths into a
+repeatable regression gate. Given an external link-capable ROM, it optionally
+builds SameBoy and runs ordinary single-player, Local Link, Remote Play with the
+OpenGL client and Remote Play with the explicit `--nogl` SDL fallback. It polls
+the structured SameBoy Link logs rather than relying on fixed startup delays,
+checks frame/audio progress and zero-drop/error invariants, and closes only the
+exact PIDs it launched. A private test copy prevents the source ROM's battery
+save from being modified.
+
+The first complete harness run passed all four cases. Each Remote Play client
+reached at least 120 decoded frames and 600 PCM packets with zero video drops,
+rejected frames, audio drops, stale packets or decode errors; both expected
+presentation backends and the host input/video/audio activation paths were
+confirmed. This automated the repeatable local coverage while leaving real
+two-machine network, controller and display behavior to the then-pending
+physical regression.
+
+### Versioned network test builds
+
+`publish-windows-build.ps1` now publishes complete Windows SDL runtimes to a
+new versioned directory on a network disk, deliberately excludes `prefs.bin`,
+records the source commit/dirty state and verifies a SHA-256 manifest after the
+copy. This lets both physical test machines select one immutable build while
+keeping their P1/P2 preferences local. An included launcher can verify and
+cache the build locally on SMB servers that deny direct executable access.
+
+OpenMediaVault initially created the copied files without execute permission,
+so Windows correctly rejected direct startup from the `sdc` share. After the
+share was configured to preserve execute bits, build
+`20260818-200055-1ac9ddab8a17-dirty` gained `ReadAndExecute` and started directly
+from the organized `M:\SAME-LINKTEST` root. A ROM smoke start loaded the OpenGL renderer, native 160x144
+framebuffer and XAudio2 48 kHz audio with no fatal or GLSL errors, and no shared
+`prefs.bin` was created.
+
+### Physical two-PC four-mode regression
+
+The final menu-driven Remote Host/Join regression passed on two physical
+Windows PCs using the same checksummed network build. The host ran the ROM
+locally and listened on UDP port 45990; the client launched the shared
+`sameboy.exe` from the NAS and joined over the 192.168.0.0/24 LAN. Windows had
+classified the host Wi-Fi as Public, so a narrow inbound rule was required for
+UDP 45990 from the local subnet.
+
+The first client attempt exposed a configuration mismatch: the client used a
+different session ID and remained on its empty pre-frame background. Matching
+the host's active session ID (`1`) connected immediately. The transport
+correctly rejected the mismatched session, but the lack of waiting/session-
+mismatch feedback is retained as a connection-status UI task.
+
+The user verified P2 video, audio and controls, free resizing, LCD/CRT/Nearest
+filter switching through the Remote Client Escape menu, clean client Disconnect
+back to the start window and clean host Disconnect. This closes the physical
+two-PC item and the complete single-player/Local Link/Remote Host/Remote Client
+UI/session regression milestone.
+
+### Instrumented physical network comparison
+
+The double-click diagnostic launcher now stores build/machine metadata plus
+separate stdout/stderr streams and a combined `sameboy-session.log`. Join
+relaunches Remote Client as a child process on Windows, so the first launcher
+captured only the parent. The client now receives explicit diagnostic file paths
+through its inherited environment; a deliberately invalid endpoint self-test
+confirmed that child-process diagnostics reach `REMOTE CLIENT STDERR` in the
+combined log.
+
+Three physical measurements now guide optimization. A direct public-IPv4 run
+streamed for roughly 484.5 seconds; the host accepted 11,422 input packets,
+sent 28,945 video frames and 96,884 PCM packets and answered 1,091/1,091 clock
+pings with zero host-side drops, rejected input or stale input. The earlier
+logger flaw means that run has no detailed client receive summary.
+
+On LAN, the Wi-Fi laptop Host/Ethernet desktop Client combination ran for about
+51.0 active seconds. The client completed 3,046 frames with zero network frame
+drops/rejections but superseded 99 complete frames (3.25%) before presentation.
+It received PCM without sequence loss or decode errors, yet recorded 33
+underflows, 13 trims and a 100.425 ms maximum packet-arrival gap. Smoothed RTT
+ended at 13.545 ms; average/maximum input-to-present latency was
+41.663/74.622 ms.
+
+Reversing the roles to Ethernet desktop Host/Wi-Fi laptop Client ran for about
+98.3 active seconds. Audio underflows fell to two, while average latency
+improved to 36.527 ms. One isolated disturbance around client time 28.5 seconds
+lost 12 audio packets and eight video frames, raised video network time to
+142.464 ms and produced the 167.422 ms maximum input latency. The stream then
+recovered and remained stable. Video superseded-before-present remained nearly
+identical at 192/5,873 frames (3.27%), pointing to sender/presentation pacing
+rather than network direction alone.
+
+These comparisons also swapped physical machine roles, so Ethernet/Wi-Fi and
+CPU effects are not fully isolated. The complete evidence, test limitations,
+repeat matrix and P0–P5 optimization gates are maintained in
+`REMOTE_PLAY_PERFORMANCE_PLAN.md`. The immediate engineering order is richer
+machine-readable telemetry, priority scheduling for input/audio, paced video
+chunks, repeated physical baselines, adaptive-PCM tuning and timestamp-driven
+client presentation pacing before codec expansion.

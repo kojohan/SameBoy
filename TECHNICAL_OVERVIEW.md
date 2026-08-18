@@ -4,7 +4,7 @@ This document is the high-level technical introduction for contributors. For the
 
 ## Current snapshot — 2026-08-18
 
-The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v4 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN and direct public-IPv4 play have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. Remote Client has a dedicated network thread, latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Video pacing/compression, authentication, encryption and production-grade Internet connectivity remain planned work.
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v4 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. Remote Client has a dedicated network thread, latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Video pacing/compression, authentication, encryption and production-grade Internet connectivity remain planned work.
 
 ## 1. Why SameBoy
 
@@ -333,6 +333,12 @@ SDL/
 
   native_netlink/
     ... later experimental backend ...
+
+test-windows-link.ps1
+  automated single-player, Local Link and Remote Play loopback smoke test
+
+publish-windows-build.ps1 / run-shared-windows-build.ps1
+  versioned, checksummed shared Windows runtime and optional local cache
 ```
 
 ## 15. Documentation map
@@ -340,7 +346,10 @@ SDL/
 - `README.md` — project introduction for visitors.
 - `ROADMAP.md` — phase-by-phase development plan.
 - `TODO.md` — actionable checklist.
+- `REMOTE_PLAY_PERFORMANCE_PLAN.md` — physical network evidence and measured pacing/audio/video optimization gates.
 - `LINK_UI_ARCHITECTURE.md` — target Link menu, session modes and control ownership.
 - `TECHNICAL_OVERVIEW.md` — this contributor-oriented architecture summary.
 - `SAMEBOY_LINK_TECHNICAL_PLAN.md` — detailed implementation notes and decisions.
 - `SAMEBOY_LINK_PLAN.md` — original project/product planning notes.
+- `build-faq.md` — reproducible Windows build and automated smoke-test usage.
+- `CONTRIBUTING.md` — upstream conventions plus SameBoy Link contributor workflow.

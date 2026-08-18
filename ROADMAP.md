@@ -93,7 +93,7 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
-**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Opus was tested and deferred; client resizing and independent P1-only host presentation are complete. The current transport also passed a five-minute manual public-IPv4 test; Internet-oriented video pacing/compression remains).
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Opus was tested and deferred; client resizing and independent P1-only host presentation are complete. Direct public-IPv4 and instrumented opposite-direction Ethernet/Wi-Fi tests pass functionally; measured transport and presentation pacing optimization is next.)
 
 **Goal:** provide good image quality without adding unnecessary latency.
 
@@ -107,13 +107,21 @@ Client-side presentation remains local so nearest-neighbour scaling, integer sca
 
 Candidate backends include raw/reference transport, fast lossless compression, tile/XOR delta methods, conventional low-latency codecs, and optional GPU hardware encode/decode where measurement shows a benefit.
 
+Before adding another codec, this phase prioritizes a machine-readable
+performance gate, input/audio-priority scheduling, paced video datagrams,
+adaptive-PCM tuning and timestamp-driven client presentation. Physical tests
+showed 36–42 ms average input-to-present latency, but also one 167 ms Wi-Fi
+burst, up to 33 audio underflows and a stable roughly 3.3% rate of completed
+frames superseded before presentation. See
+`REMOTE_PLAY_PERFORMANCE_PLAN.md` for the exact evidence and P0–P5 gates.
+
 **Exit criterion:** stream quality is selectable and queues remain bounded without latency growth.
 
 ---
 
 ## Current cross-phase milestone — UI and session integration
 
-**Status:** Implementation complete; final physical four-mode regression in progress (2026-08-18).
+**Status:** Complete, including physical two-PC four-mode regression (2026-08-18).
 
 **Goal:** convert the proven CLI backends into the intended SameBoy interaction model before expanding Internet coordination.
 
@@ -129,7 +137,7 @@ Deliverables:
 
 **Exit criterion:** all four roles are selectable in the same executable, normal single-player behavior remains intact, and Disconnect releases link/network/input state cleanly.
 
-See `LINK_UI_ARCHITECTURE.md` for the design contract. Automated build, loopback, menu, Disconnect and full client shader/filter checks pass. Final physical Host/Join verification, visual polish, packaging and compatibility work remain.
+See `LINK_UI_ARCHITECTURE.md` for the design contract. Automated build, loopback, menu, Disconnect, full client shader/filter and physical two-PC Host/Join checks pass. Visual polish, packaging and compatibility work remain.
 
 ---
 

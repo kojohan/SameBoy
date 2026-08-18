@@ -46,10 +46,10 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Keep CLI modes working as developer/regression entry points.
 - [x] Add a Remote Client Escape menu with persistent local video/audio/P2-control settings.
 - [x] Return Remote Client to the ordinary idle frontend after Disconnect.
-- [ ] Regression-test all four modes plus ordinary single-player.
+- [x] Regression-test all four modes plus ordinary single-player.
   - [x] One-PC regression: headless single-player, SDL single-player, menu-driven
     Local Link, menu-driven Remote Host/Join loopback and clean Disconnect.
-  - [ ] Repeat the menu-driven Remote Host/Join flow on two physical PCs.
+  - [x] Repeat the menu-driven Remote Host/Join flow on two physical PCs.
 
 ## LAN Remote Play
 
@@ -64,12 +64,29 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Make the remote P2 window freely resizable without stretching its aspect ratio.
 - [x] Add a runtime host-view toggle between P1-only and side-by-side presentation.
 - [x] Reuse SameBoy's OpenGL shader/filter path for client-side presentation, with an SDL renderer fallback.
+- [x] Remove the temporary P2 button-state overlay from Remote Client gameplay presentation.
 - [x] Add remote P2 audio path.
 - [x] Add bounded video/audio queues.
 - [x] Drop obsolete video instead of accumulating latency.
 - [x] Replace the fixed PCM queue with an adaptive jitter buffer and clock-drift correction.
 - [x] Implement selectable Opus Restricted Low Delay audio with 5 ms packets and PLC.
 - [x] Compare PCM and Opus on the physical Wi-Fi client; retain PCM as the stable baseline and defer Opus.
+
+## Current — Remote Play pacing and resilience
+
+- [x] Add a double-click Windows launcher that exports complete Host and Remote Client diagnostic logs.
+- [x] Capture direct-Internet and opposite-direction Ethernet/Wi-Fi physical measurements.
+- [ ] Add a host/client log summarizer with JSON/Markdown output and shutdown-tail handling.
+- [ ] Record machine role, network medium/link speed and test label in log metadata.
+- [ ] Add p50/p95/p99/window telemetry for audio arrival, RTT/jitter, video network time, queue age and total latency.
+- [ ] Count frames actually presented separately from completed, superseded and deliberately skipped frames.
+- [ ] Run three five-minute repetitions for both-Ethernet and fixed-role Ethernet/Wi-Fi baselines.
+- [ ] Add a bounded priority sender scheduler: input/clock, then audio, then video.
+- [ ] Pace video chunks across the frame interval and drop stale unsent video before it delays realtime traffic.
+- [ ] Tune PCM startup, adaptive target/hysteresis, physical capacity and drift correction from measured percentiles.
+- [ ] Add timestamp-driven bounded client presentation pacing.
+- [ ] Add deterministic delay/jitter/loss regression after the physical LAN gates pass.
+- [ ] Meet the quantitative P0–P4 gates in `REMOTE_PLAY_PERFORMANCE_PLAN.md`.
 
 ## Streaming quality
 
@@ -156,13 +173,13 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 
 - [ ] Polish the normal SameBoy `Link` menu and session dialogs.
 - [ ] Polish P1/P2 controller assignment and validation feedback.
-- [ ] Connection-status UI.
+- [ ] Connection-status UI, including waiting/session-mismatch feedback before the first client frame.
 - [ ] Quality preset UI.
 - [ ] Compatibility matrix.
-- [ ] Exportable diagnostic logs.
+- [x] Exportable diagnostic logs.
 - [ ] Windows packaging.
-- [ ] Automated smoke/regression tests.
-- [ ] Contributor/development setup notes.
+- [x] Automated one-PC Windows smoke/regression test for single-player, Local Link and OpenGL/SDL Remote Play loopback.
+- [x] Contributor/development setup notes.
 
 ## Optional later — Native NetLink
 

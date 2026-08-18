@@ -83,12 +83,13 @@ Start here depending on what you want to know:
 - **[ROADMAP.md](ROADMAP.md)** — clear phase-by-phase development plan and exit criteria.
 - **[TODO.md](TODO.md)** — actionable development checklist.
 - **[DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)** — completed work, measurements and regression evidence.
-- **[build-faq.md](build-faq.md)** — Windows prerequisites and the one-command build script.
+- **[REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md)** — physical network results and the measured optimization plan.
+- **[build-faq.md](build-faq.md)** — Windows prerequisites, one-command build and automated Link smoke test.
 - **[LINK_UI_ARCHITECTURE.md](LINK_UI_ARCHITECTURE.md)** — target Link menu, session modes and P1/P2 control ownership.
 - **[TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md)** — contributor-friendly architecture overview.
 - **[SAMEBOY_LINK_TECHNICAL_PLAN.md](SAMEBOY_LINK_TECHNICAL_PLAN.md)** — detailed implementation decisions and technical notes.
 - **[SAMEBOY_LINK_PLAN.md](SAMEBOY_LINK_PLAN.md)** — product/feature planning notes.
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — upstream SameBoy contribution guidance; fork-specific contributor notes will be added as implementation begins.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — upstream SameBoy contribution guidance plus SameBoy Link workflow and validation notes.
 
 ## Current implementation priority
 
@@ -98,12 +99,13 @@ Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
 settings-capable Remote Client with local SameBoy shaders/filters. The immediate
 development order is now:
 
-1. physically regression-test the completed four-mode UI/session flow on both PCs;
-2. improve Internet video pacing and measure queue age and presentation latency;
-3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback;
-4. optimize latency based on further physical Internet measurements.
+1. add comparable log summaries and percentile/window telemetry;
+2. prioritize input/audio and pace video chunks instead of sending whole-frame bursts;
+3. tune adaptive PCM and client presentation pacing against repeated physical tests;
+4. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
 
-See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.
+See [REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md),
+[ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.
 
 ## Technical principle
 

@@ -24,6 +24,21 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include "windows_associations.h"
+
+static void redirect_remote_client_diagnostics(void)
+{
+    const WCHAR *stdout_path = _wgetenv(L"SAMEBOY_LINK_CLIENT_STDOUT");
+    const WCHAR *stderr_path = _wgetenv(L"SAMEBOY_LINK_CLIENT_STDERR");
+
+    if (stdout_path && stdout_path[0] && _wfreopen(stdout_path, L"w", stdout)) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+    }
+    if (stderr_path && stderr_path[0] && _wfreopen(stderr_path, L"w", stderr)) {
+        setvbuf(stderr, NULL, _IONBF, 0);
+        fprintf(stderr,
+                "[SameBoy Link][frontend] remote_client diagnostic_log=enabled\n");
+    }
+}
 #endif
 
 static bool stop_on_start = false;
@@ -2041,6 +2056,14 @@ int main(int argc, char **argv)
     bool nogl = get_arg_flag("--nogl", &argc, argv);
     stop_on_start = get_arg_flag("--stop-debugger", &argc, argv) || get_arg_flag("-s", &argc, argv);
     bool local_link_requested = get_arg_flag("--local-link", &argc, argv);
+
+#ifdef _WIN32
+    if (remote_client_endpoint) {
+        /* Join relaunches this executable; write its diagnostics to explicit
+         * files supplied by the double-click logging launcher. */
+        redirect_remote_client_diagnostics();
+    }
+#endif
 
     uint32_t remote_session_id = 1;
     if (remote_session_string &&

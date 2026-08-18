@@ -52,6 +52,68 @@ by default; `--remote-audio opus` is unavailable in this executable.
 `SAMEBOY_SDL2_ROOT` and `SAMEBOY_OPUS_ROOT` may be used instead of the matching
 parameters. The defaults are `C:\SDL2` and `C:\msys64\mingw64`.
 
+## Automated SameBoy Link smoke test
+
+Pass a link-capable Game Boy or Game Boy Color ROM to the Windows regression
+harness:
+
+```powershell
+.\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb"
+```
+
+The script builds the debug SDL frontend, then verifies ordinary single-player,
+Local Link, Remote Host/Client OpenGL loopback and the Remote Client `--nogl`
+SDL fallback. It waits for measured/synchronized frames, at least 120 decoded
+remote video frames, at least 600 PCM packets, zero video drops/rejections,
+zero audio drops/stale packets/decode errors and successful host input, video
+and audio activation.
+
+The supplied ROM is copied into the ignored `build\regression` area for the
+test, so its original battery save cannot be modified. The temporary ROM copy
+is removed afterward; logs and isolated test saves remain below the printed
+run directory for diagnosis. Every process is tracked by PID and closed during
+success or failure.
+
+Useful options:
+
+```powershell
+# Reuse an already-built debug executable
+.\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb" -SkipBuild
+
+# Display test windows instead of starting them minimized
+.\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb" -ShowWindows
+
+# Avoid locally occupied UDP ports or allow more time on a slower machine
+.\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb" -BasePort 46000 -TimeoutSeconds 30
+```
+
+## Shared Windows test builds
+
+Publish a complete, versioned SDL runtime to a network disk with:
+
+```powershell
+.\publish-windows-build.ps1 -DestinationRoot "M:\SAME-LINKTEST"
+```
+
+The publisher runs the debug build unless `-SkipBuild` is supplied, copies the
+executable, DLLs, shaders, palettes and boot resources into a new
+`builds\<timestamp>-<commit>` directory, excludes `prefs.bin`, writes a JSON
+manifest and verifies every copied file with SHA-256. Never replace a published
+directory in place while either machine is using it.
+
+If the SMB share grants Windows execute access, both computers can launch the
+same `sameboy.exe` directly from that versioned directory. Otherwise run the
+included `run-shared-windows-build.ps1`; it verifies the same manifest, copies
+the immutable build to a per-user Local AppData cache and starts it locally.
+ROMs, battery saves and diagnostic logs should not be stored in the shared
+runtime directory.
+
+The current development NAS is available as `M:` on the build PC and the test
+root is `M:\SAME-LINKTEST`, or `\\KONAS\sdc\SAME-LINKTEST` over UNC.
+OpenMediaVault's `sdc` SMB share is
+configured to preserve execute bits for newly published files. Older build
+directories created before that setting must not be used for direct execution.
+
 ## Prerequisites
 
 The script checks these prerequisites and reports a specific missing tool or
@@ -118,23 +180,28 @@ Each line is prefixed with a category such as `[SameBoy Link][video]`,
 `[SameBoy Link][audio]`, or `[SameBoy Link][timing]`, so later link and latency
 diagnostics can use the same log stream without changing the emulator core.
 
-## Local Link developer mode
+## Local Link
 
-The current developer interface exposes Local Link through a command-line option.
-It starts two cores with the same ROM and shows their native framebuffers side by
-side:
+Open a ROM in the normal SDL frontend and choose `Link > Local Link...` to start
+two cores with the same ROM and show their native framebuffers side by side.
+Player 1 and Player 2 keyboard/controller mappings are configured independently
+under Control Options, and both profiles persist between runs.
+
+The command-line entry point remains available for development and regression
+testing:
 
 ```powershell
 .\build\bin\SDL\sameboy.exe --local-link "C:\path\to\link-game.gb"
 ```
 
-Use arrow keys, X, Z, Enter and Backspace for Player 1. Use W/A/S/D, K, J, I
-and U for Player 2. Player 2's battery save is written beside the ROM with the
-suffix `.p2.sav`; it never shares Player 1's `.sav` path.
+The default keyboard mappings use arrow keys, X, Z, Enter and Backspace for
+Player 1 and W/A/S/D, K, J, I and U for Player 2. Player 2's battery save is
+written beside the ROM with the suffix `.p2.sav`; it never shares Player 1's
+`.sav` path. Player 2 audio is mixed locally, and `Link > Disconnect` releases
+the second core and returns to ordinary single-player.
 
-The mode is intended for development testing. There is not yet a Local Link
-menu, controller assignment UI, mixed P2 audio, or a completed compatibility
-matrix.
+The game compatibility matrix is still incomplete, so record the ROM revision,
+model and observed link behavior when reporting a Local Link problem.
 
 ## LAN remote-input developer mode
 
@@ -206,6 +273,12 @@ The client connects to the router's public IPv4 address and forwarded port:
 .\sameboy.exe --remote-input-client PUBLIC_IP:45930 --remote-session 123456789
 ```
 
+For a menu-driven test with a persistent diagnostic log, double-click
+`start-sameboy-with-log.cmd` beside `sameboy.exe`. Start Host or Join from the
+Link menu as usual, then exit SameBoy normally when the test is finished. The
+launcher prints the path to a combined `sameboy-session.log` below
+`Documents\SameBoy-Link-Logs`; send that file when reporting the test result.
+
 Run the client from a genuinely different Internet connection. A client on the
 same LAN may fail when using the public address if the router lacks NAT loopback;
 that does not prove the forwarding is broken. If the router's reported WAN
@@ -216,3 +289,10 @@ The first manual public-IPv4 test completed roughly five minutes of play with
 18,590 video frames, 62,188 PCM packets and zero host-side send drops. This is a
 development proof only; it does not change the authentication/encryption warning
 or make permanent port forwarding safe.
+
+Later instrumented physical runs include a longer direct-IPv4 host capture and
+opposite-direction LAN tests with Wi-Fi on the Host and Client respectively.
+Use `REMOTE_PLAY_PERFORMANCE_PLAN.md` for the exact counters, interpretation,
+test limitations and the current optimization gates. In particular, keep Host
+and Client log directories separate when copying them from
+`Documents\SameBoy-Link-Logs` so identically named files are not overwritten.

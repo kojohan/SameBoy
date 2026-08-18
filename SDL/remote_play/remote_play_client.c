@@ -302,8 +302,7 @@ static SDL_Rect client_video_destination(SDL_Window *client_window,
 
 static void render_client_sdl(SDL_Window *client_window,
                               SDL_Renderer *client_renderer,
-                              SDL_Texture *video_texture,
-                              uint16_t buttons)
+                              SDL_Texture *video_texture)
 {
     SDL_SetRenderDrawColor(client_renderer, 15, 22, 30, 255);
     SDL_RenderClear(client_renderer);
@@ -327,23 +326,6 @@ static void render_client_sdl(SDL_Window *client_window,
         SDL_RenderCopy(client_renderer, video_texture, NULL, &video_destination);
     }
 
-    SDL_SetRenderDrawBlendMode(client_renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect indicator = {
-        video_texture? video_destination.x + 6 : 6,
-        video_texture? video_destination.y + 6 : 6,
-        8,
-        8,
-    };
-    for (unsigned bit = 0; bit < 8; bit++) {
-        if (buttons & (1u << bit)) {
-            SDL_SetRenderDrawColor(client_renderer, 65, 210, 130, 230);
-        }
-        else {
-            SDL_SetRenderDrawColor(client_renderer, 25, 35, 45, 180);
-        }
-        indicator.x = (video_texture? video_destination.x : 0) + 6 + bit * 11;
-        SDL_RenderFillRect(client_renderer, &indicator);
-    }
     SDL_RenderPresent(client_renderer);
 }
 
@@ -352,7 +334,6 @@ static void render_client_gl(SDL_Window *client_window,
                              void *new_pixels,
                              unsigned texture_width,
                              unsigned texture_height,
-                             uint16_t buttons,
                              uint64_t *upload_begin_time,
                              uint64_t *upload_end_time,
                              uint64_t *present_begin_time,
@@ -393,20 +374,6 @@ static void render_client_gl(SDL_Window *client_window,
                                            video_destination.h);
     }
 
-    glEnable(GL_SCISSOR_TEST);
-    for (unsigned bit = 0; bit < 8; bit++) {
-        if (buttons & (1u << bit)) {
-            glClearColor(65.0f / 255.0f, 210.0f / 255.0f, 130.0f / 255.0f, 1.0f);
-        }
-        else {
-            glClearColor(25.0f / 255.0f, 35.0f / 255.0f, 45.0f / 255.0f, 1.0f);
-        }
-        int x = (video_available? video_destination.x : 0) + 6 + (int)bit * 11;
-        int y = (video_available? video_destination.y : 0) + 6;
-        glScissor(x, output_height - y - 8, 8, 8);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
-    glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, output_width, output_height);
     SDL_GL_SwapWindow(client_window);
     *present_end_time = monotonic_time_us();
@@ -1366,7 +1333,6 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                          NULL,
                          160,
                          144,
-                         buttons,
                          &initial_upload_begin,
                          &initial_upload_end,
                          &initial_present_begin,
@@ -1375,8 +1341,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     else {
         render_client_sdl(client_window,
                           client_renderer,
-                          video_texture,
-                          buttons);
+                          video_texture);
     }
 
     SDL_mutex *network_mutex = SDL_CreateMutex();
@@ -1633,10 +1598,9 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 render_client_gl(client_window,
                                  video_available,
                                  (presenting_new_frame || reupload_video_frame)?
-                                     presented_frame : NULL,
+                                 presented_frame : NULL,
                                  texture_width? texture_width : 160,
                                  texture_height? texture_height : 144,
-                                 buttons,
                                  &upload_begin_time,
                                  &upload_end_time,
                                  &present_begin_time,
@@ -1655,8 +1619,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 present_begin_time = monotonic_time_us();
                 render_client_sdl(client_window,
                                   client_renderer,
-                                  video_texture,
-                                  buttons);
+                                  video_texture);
                 present_end_time = monotonic_time_us();
             }
             if (presenting_new_frame) {

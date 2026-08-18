@@ -4,7 +4,7 @@ This document defines the target user-facing architecture for SameBoy Link. It i
 
 ## Implementation status — 2026-08-18
 
-The first direct-IP implementation of this contract is complete and awaiting final physical four-mode regression. The SDL frontend has explicit session modes, a `Link` menu, persistent independent P1/P2 keyboard/controller mappings, menu-driven Local Link/Host/Join/Disconnect and retained CLI regression paths. Join prompts for `IP:port`; port, session ID and host presentation settings persist.
+The first direct-IP implementation of this contract and its physical two-PC four-mode regression are complete. The SDL frontend has explicit session modes, a `Link` menu, persistent independent P1/P2 keyboard/controller mappings, menu-driven Local Link/Host/Join/Disconnect and retained CLI regression paths. Join prompts for `IP:port`; port, session ID and host presentation settings persist.
 
 Remote Client uses the same executable without a local Game Boy core. Escape opens a client-specific SameBoy menu for scaling, the complete SameBoy OpenGL shader/filter set, window size/fullscreen, volume/mute and P2 keyboard/controller configuration. Disconnect releases its network/audio/video resources and returns to the ordinary idle frontend. Systems without a usable OpenGL 3.2 context retain a nearest/bilinear SDL renderer fallback.
 
