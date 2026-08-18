@@ -1,4 +1,5 @@
 #include "multiplayer_input.h"
+#include "../configuration.h"
 
 static const struct {
     uint16_t button;
@@ -16,68 +17,22 @@ static const struct {
 
 bool multiplayer_input_button_for_scancode(SDL_Scancode scancode, uint16_t *button)
 {
-    switch (scancode) {
-        case SDL_SCANCODE_D:
-            *button = MULTIPLAYER_BUTTON_RIGHT;
-            break;
-        case SDL_SCANCODE_A:
-            *button = MULTIPLAYER_BUTTON_LEFT;
-            break;
-        case SDL_SCANCODE_W:
-            *button = MULTIPLAYER_BUTTON_UP;
-            break;
-        case SDL_SCANCODE_S:
-            *button = MULTIPLAYER_BUTTON_DOWN;
-            break;
-        case SDL_SCANCODE_K:
-            *button = MULTIPLAYER_BUTTON_A;
-            break;
-        case SDL_SCANCODE_J:
-            *button = MULTIPLAYER_BUTTON_B;
-            break;
-        case SDL_SCANCODE_U:
-            *button = MULTIPLAYER_BUTTON_SELECT;
-            break;
-        case SDL_SCANCODE_I:
-            *button = MULTIPLAYER_BUTTON_START;
-            break;
-        default:
-            return false;
+    if (!button) {
+        return false;
     }
-    return true;
+    for (unsigned i = 0; i < sizeof(button_keys) / sizeof(button_keys[0]); i++) {
+        if (configuration.p2_keys[button_keys[i].key] == scancode) {
+            *button = button_keys[i].button;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool multiplayer_input_button_for_remote_scancode(SDL_Scancode scancode,
                                                    uint16_t *button)
 {
-    switch (scancode) {
-        case SDL_SCANCODE_RIGHT:
-            *button = MULTIPLAYER_BUTTON_RIGHT;
-            return true;
-        case SDL_SCANCODE_LEFT:
-            *button = MULTIPLAYER_BUTTON_LEFT;
-            return true;
-        case SDL_SCANCODE_UP:
-            *button = MULTIPLAYER_BUTTON_UP;
-            return true;
-        case SDL_SCANCODE_DOWN:
-            *button = MULTIPLAYER_BUTTON_DOWN;
-            return true;
-        case SDL_SCANCODE_X:
-            *button = MULTIPLAYER_BUTTON_A;
-            return true;
-        case SDL_SCANCODE_Z:
-            *button = MULTIPLAYER_BUTTON_B;
-            return true;
-        case SDL_SCANCODE_BACKSPACE:
-            *button = MULTIPLAYER_BUTTON_SELECT;
-            return true;
-        case SDL_SCANCODE_RETURN:
-            *button = MULTIPLAYER_BUTTON_START;
-            return true;
-        default:
-            return multiplayer_input_button_for_scancode(scancode, button);
-    }
+    return multiplayer_input_button_for_scancode(scancode, button);
 }
 
 uint16_t multiplayer_input_current_button_mask(const GameSession *session)
@@ -110,6 +65,20 @@ void multiplayer_input_apply_button_mask(GameSession *session, uint16_t buttons)
     }
 }
 
+void multiplayer_input_set_button_state(GameSession *session,
+                                         uint16_t button,
+                                         bool pressed)
+{
+    uint16_t buttons = multiplayer_input_current_button_mask(session);
+    if (pressed) {
+        buttons |= button;
+    }
+    else {
+        buttons &= ~button;
+    }
+    multiplayer_input_apply_button_mask(session, buttons);
+}
+
 bool multiplayer_input_handle_keyboard_event(GameSession *session, const SDL_KeyboardEvent *event)
 {
     if (session->active_slot_count < 2) {
@@ -121,14 +90,7 @@ bool multiplayer_input_handle_keyboard_event(GameSession *session, const SDL_Key
         return false;
     }
 
-    uint16_t buttons = multiplayer_input_current_button_mask(session);
     bool pressed = event->type == SDL_KEYDOWN;
-    if (pressed) {
-        buttons |= button;
-    }
-    else {
-        buttons &= ~button;
-    }
-    multiplayer_input_apply_button_mask(session, buttons);
+    multiplayer_input_set_button_state(session, button, pressed);
     return true;
 }

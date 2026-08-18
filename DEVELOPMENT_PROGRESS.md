@@ -434,3 +434,67 @@ input-to-present latency and receive-drop statistics remain unmeasured for this
 first Internet proof. The result validates public reachability and playability,
 not production readiness: authentication, encryption, automatic NAT traversal,
 relay fallback and adaptive Internet bandwidth are still required.
+
+## 2026-08-18 — GUI/session architecture adopted
+
+`LINK_UI_ARCHITECTURE.md` is now the design contract for converting the proven
+CLI backends into the normal SameBoy interaction model. The immediate milestone
+is explicit `GameSession` modes and lifecycle, followed by a dedicated `Link`
+menu, independent persistent P1/P2 mappings and clean Disconnect behavior. The
+same executable remains responsible for single-player, Local Link, Remote Host
+and Remote Client roles, and the existing CLI entry points remain regression
+paths while the menu flows are introduced.
+
+This reprioritizes essential UI/session integration ahead of further Internet
+coordination. Client shader/filter reuse, video pacing, authentication,
+encryption, NAT traversal and relay support remain subsequent milestones.
+
+### First Link-menu slice
+
+The SDL frontend now has explicit single-player, Local Link, Remote Host and
+Remote Client session modes. Existing CLI entry points select those modes
+through `GameSession`, and Local Link can also be started at runtime through
+`Link > Local Link…`. `Link > Disconnect` tears down the local serial bridge,
+saves both active batteries, releases slot 1 and returns to single-player.
+
+The first physical menu test exposed a presentation-size bug: opening the menu
+during a 320x144 side-by-side session still allocated a 160x144 GUI buffer. The
+renderer then read beyond that allocation. The GUI and mouse-coordinate path
+now use the complete current presentation size. Local Link, opening the menu
+and Disconnect were physically retested successfully.
+
+Keyboard P2 is now a separate persistent profile under Control Options and is
+used by both Local Link and Remote Client. Controller configuration now has
+separate P1/P2 layouts and device assignments; Local Link routes the second
+assigned controller to slot 1, while Remote Client interprets connected
+controllers using the configured P2 layout. Physical controller and preference
+persistence verification is complete: keyboard remapping, assigning P2 to a
+controller, two simultaneously connected controllers and unplug/replug hotplug
+recovery were all accepted in the physical test.
+
+### Direct-IP Host/Join GUI slice
+
+The Link menu now exposes Local Link, Remote Host, Remote Client, Disconnect and
+Remote Link Settings actions. Selecting Join prompts directly for `IP:port`,
+prefilled with the last successfully submitted address. The settings menu also
+persists that address, the host UDP port, the shared numeric session ID and the
+host's P1-only/both-screens view. Remote Host starts the already tested PCM
+backend inside the current ROM session. Remote Client relaunches the same
+executable in its established client role, avoiding a second network
+implementation.
+
+Remote Client now participates in the frontend menu lifecycle. Escape opens a
+client-specific SameBoy menu instead of terminating the process. The client can
+resume, disconnect, quit, change aspect/integer/stretch scaling, select nearest
+or bilinear filtering, resize or toggle fullscreen, change volume/mute, remap
+the P2 keyboard and select/configure the P2 controller. These settings persist
+on the client machine. Disconnect tears down its UDP/audio/video resources and
+returns to the ordinary SameBoy start window without launching another process.
+
+The debug build succeeds with Opus disabled. Automated protocol-v4 loopback
+regressions completed with zero video drops, rejected frames, audio drops,
+underflows, trims or decode errors. The client-menu regression verified that
+Escape leaves the stream process alive and that Disconnect stops the network
+thread and returns that process to the `SameBoy v1.0.3` start window. Physical
+verification of the new menu-driven Host/Join path remains before the four-mode
+GUI/session milestone is signed off.

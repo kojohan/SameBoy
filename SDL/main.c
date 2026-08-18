@@ -30,7 +30,6 @@ static bool stop_on_start = false;
 GameSession game_session;
 static LocalLink local_link;
 static RemotePlayHost remote_input_host;
-static bool local_link_requested = false;
 static bool remote_host_show_p2 = true;
 static bool paused = false;
 static bool underclock_down = false, rewind_down = false, do_rewind = false, rewind_paused = false, turbo_down = false;
@@ -438,17 +437,29 @@ static void handle_events(GB_gameboy_t *gb)
             }
                 
             case SDL_JOYDEVICEREMOVED:
-                if (joystick && event.jdevice.which == SDL_JoystickInstanceID(joystick)) {
-                    SDL_JoystickClose(joystick);
-                    joystick = NULL;
-                }
             case SDL_JOYDEVICEADDED:
                 connect_joypad();
                 break;
                 
             case SDL_JOYBUTTONUP:
             case SDL_JOYBUTTONDOWN: {
-                joypad_button_t button = get_joypad_button(event.jbutton.button);
+                int input_player = joypad_player_for_instance(event.jbutton.which);
+                if (input_player < 0) {
+                    break;
+                }
+                joypad_button_t button = get_player_joypad_button(
+                    (unsigned)input_player,
+                    event.jbutton.button);
+                if (input_player == 1) {
+                    if (local_link.connected && !remote_input_host.active &&
+                        (GB_key_t)button < GB_KEY_MAX) {
+                        multiplayer_input_set_button_state(
+                            &game_session,
+                            (uint16_t)(1u << button),
+                            event.type == SDL_JOYBUTTONDOWN);
+                    }
+                    break;
+                }
                 if ((GB_key_t) button < GB_KEY_MAX) {
                     GB_set_key_state(gb, (GB_key_t) button, event.type == SDL_JOYBUTTONDOWN);
                 }
@@ -520,6 +531,59 @@ static void handle_events(GB_gameboy_t *gb)
             break;
                 
             case SDL_JOYAXISMOTION: {
+                int input_player = joypad_player_for_instance(event.jaxis.which);
+                if (input_player < 0) {
+                    break;
+                }
+                if (input_player == 1) {
+                    if (!local_link.connected || remote_input_host.active) {
+                        break;
+                    }
+                    joypad_axis_t axis = get_player_joypad_axis(1, event.jaxis.axis);
+                    if (axis == JOYPAD_AXISES_X) {
+                        if (event.jaxis.value > JOYSTICK_HIGH) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_RIGHT, true);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_LEFT, false);
+                        }
+                        else if (event.jaxis.value < -JOYSTICK_HIGH) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_RIGHT, false);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_LEFT, true);
+                        }
+                        else if (event.jaxis.value < JOYSTICK_LOW &&
+                                 event.jaxis.value > -JOYSTICK_LOW) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_RIGHT, false);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_LEFT, false);
+                        }
+                    }
+                    else if (axis == JOYPAD_AXISES_Y) {
+                        if (event.jaxis.value > JOYSTICK_HIGH) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_DOWN, true);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_UP, false);
+                        }
+                        else if (event.jaxis.value < -JOYSTICK_HIGH) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_DOWN, false);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_UP, true);
+                        }
+                        else if (event.jaxis.value < JOYSTICK_LOW &&
+                                 event.jaxis.value > -JOYSTICK_LOW) {
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_DOWN, false);
+                            multiplayer_input_set_button_state(
+                                &game_session, MULTIPLAYER_BUTTON_UP, false);
+                        }
+                    }
+                    break;
+                }
                 static bool axis_active[2] = {false, false};
                 static double accel_values[2] = {0, 0};
                 static double axis_values[2] = {0, 0};
@@ -589,6 +653,24 @@ static void handle_events(GB_gameboy_t *gb)
                 value == SDL_HAT_LEFTUP || value == SDL_HAT_UP || value == SDL_HAT_RIGHTUP ? -1 : (value == SDL_HAT_LEFTDOWN || value == SDL_HAT_DOWN || value == SDL_HAT_RIGHTDOWN ? 1 : 0);
                 int8_t leftright =
                 value == SDL_HAT_LEFTUP || value == SDL_HAT_LEFT || value == SDL_HAT_LEFTDOWN ? -1 : (value == SDL_HAT_RIGHTUP || value == SDL_HAT_RIGHT || value == SDL_HAT_RIGHTDOWN ? 1 : 0);
+
+                int input_player = joypad_player_for_instance(event.jhat.which);
+                if (input_player < 0) {
+                    break;
+                }
+                if (input_player == 1) {
+                    if (local_link.connected && !remote_input_host.active) {
+                        multiplayer_input_set_button_state(
+                            &game_session, MULTIPLAYER_BUTTON_LEFT, leftright == -1);
+                        multiplayer_input_set_button_state(
+                            &game_session, MULTIPLAYER_BUTTON_RIGHT, leftright == 1);
+                        multiplayer_input_set_button_state(
+                            &game_session, MULTIPLAYER_BUTTON_UP, updown == -1);
+                        multiplayer_input_set_button_state(
+                            &game_session, MULTIPLAYER_BUTTON_DOWN, updown == 1);
+                    }
+                    break;
+                }
                 
                 GB_set_use_faux_analog_inputs(gb, 0, false);
                 GB_set_key_state(gb, GB_KEY_LEFT, leftright == -1);
@@ -1035,6 +1117,13 @@ static void initialize_windows_console(void)
 #endif
     
 static bool doing_hot_swap = false;
+static bool initialize_secondary_slot(GB_model_t model, const char *rom_path);
+static bool start_local_link_session(void);
+static bool start_remote_host_session(void);
+static bool start_remote_client_session(void);
+static void disconnect_link_session(void);
+static void save_configuration(void);
+
 static bool handle_pending_command(void)
 {
     EmulatorSlot *slot = current_emulator_slot();
@@ -1100,6 +1189,22 @@ static bool handle_pending_command(void)
         case GB_SDL_NEW_FILE_COMMAND:
             save_active_batteries();
             return true;
+
+        case GB_SDL_START_LOCAL_LINK_COMMAND:
+            start_local_link_session();
+            return false;
+
+        case GB_SDL_START_REMOTE_HOST_COMMAND:
+            start_remote_host_session();
+            return false;
+
+        case GB_SDL_START_REMOTE_CLIENT_COMMAND:
+            start_remote_client_session();
+            return false;
+
+        case GB_SDL_DISCONNECT_LINK_COMMAND:
+            disconnect_link_session();
+            return false;
             
         case GB_SDL_QUIT_COMMAND:
             save_active_batteries();
@@ -1298,8 +1403,9 @@ static bool initialize_secondary_slot(GB_model_t model, const char *rom_path)
     }
     GB_load_battery(gameboy, slot->battery_save_path);
 
-    game_session.active_slot_count = 2;
-    game_session.presentation_slot_count = 2;
+    if (!game_session_activate_secondary_slot(&game_session)) {
+        return false;
+    }
     sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
                      "slot=1 framebuffer=%ux%u pitch=%u save_path=%s",
                      GB_get_screen_width(gameboy),
@@ -1307,6 +1413,204 @@ static bool initialize_secondary_slot(GB_model_t model, const char *rom_path)
                      GB_get_screen_width(gameboy) * (unsigned)sizeof(uint32_t),
                      slot->battery_save_path);
     return true;
+}
+
+static bool start_local_link_session(void)
+{
+    EmulatorSlot *primary = game_session_primary_slot(&game_session);
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER ||
+        !GB_is_inited(&primary->gameboy) || !primary->rom_path ||
+        !game_session_begin_mode(&game_session, GAME_SESSION_LOCAL_LINK)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link Error",
+                                 "Could not enter Local Link session mode.",
+                                 window);
+        return false;
+    }
+
+    if (!initialize_secondary_slot(model_to_use(), primary->rom_path) ||
+        !local_link_connect(&local_link)) {
+        local_link_disconnect(&local_link);
+        game_session_end_mode(&game_session);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link Error",
+                                 "Could not initialize the second Game Boy instance.",
+                                 window);
+        return false;
+    }
+
+    screen_size_changed(true);
+    show_osd_text("Local Link connected");
+    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                     "game_session transition=single_player->local_link source=menu active_slots=%u",
+                     game_session.active_slot_count);
+    return true;
+}
+
+static bool start_remote_host_session(void)
+{
+    EmulatorSlot *primary = game_session_primary_slot(&game_session);
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER ||
+        !GB_is_inited(&primary->gameboy) || !primary->rom_path ||
+        !game_session_begin_mode(&game_session, GAME_SESSION_REMOTE_HOST)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link Error",
+                                 "Could not enter Remote Host session mode.",
+                                 window);
+        return false;
+    }
+
+    char error[128];
+    if (!remote_play_host_start(&remote_input_host,
+                                &game_session,
+                                configuration.remote_link_port,
+                                configuration.remote_link_session_id,
+                                error,
+                                sizeof(error))) {
+        game_session_end_mode(&game_session);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "Could not Host Remote Link",
+                                 error,
+                                 window);
+        return false;
+    }
+    remote_play_host_set_audio_codec(&remote_input_host,
+                                     REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE);
+    remote_play_host_set_audio_sample_rate(&remote_input_host,
+                                           GB_audio_get_frequency());
+
+    if (!initialize_secondary_slot(model_to_use(), primary->rom_path) ||
+        !local_link_connect(&local_link)) {
+        remote_play_host_stop(&remote_input_host);
+        local_link_disconnect(&local_link);
+        game_session_end_mode(&game_session);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link Error",
+                                 "Could not initialize the second Game Boy instance.",
+                                 window);
+        return false;
+    }
+
+    remote_host_show_p2 = configuration.remote_link_host_show_p2;
+    game_session_set_presentation_slot_count(&game_session,
+                                             remote_host_show_p2? 2 : 1);
+    screen_size_changed(true);
+    static char message[80];
+    snprintf(message,
+             sizeof(message),
+             "Hosting UDP %u\nSession %lu",
+             configuration.remote_link_port,
+             (unsigned long)configuration.remote_link_session_id);
+    show_osd_text(message);
+    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                     "game_session transition=single_player->remote_host source=menu port=%u session=%lu active_slots=%u",
+                     configuration.remote_link_port,
+                     (unsigned long)configuration.remote_link_session_id,
+                     game_session.active_slot_count);
+    return true;
+}
+
+static bool launch_remote_client_process(char *error, size_t error_size)
+{
+#ifdef _WIN32
+    WCHAR executable[MAX_PATH + 1];
+    DWORD executable_length = GetModuleFileNameW(NULL, executable, MAX_PATH);
+    if (!executable_length || executable_length >= MAX_PATH) {
+        snprintf(error, error_size, "Could not locate sameboy.exe (Windows error %lu).",
+                 (unsigned long)GetLastError());
+        return false;
+    }
+
+    WCHAR endpoint[64];
+    if (!MultiByteToWideChar(CP_UTF8,
+                             MB_ERR_INVALID_CHARS,
+                             configuration.remote_link_endpoint,
+                             -1,
+                             endpoint,
+                             sizeof(endpoint) / sizeof(endpoint[0]))) {
+        snprintf(error, error_size, "The Join Address contains invalid characters.");
+        return false;
+    }
+
+    WCHAR command_line[MAX_PATH + 160];
+    swprintf(command_line,
+             sizeof(command_line) / sizeof(command_line[0]),
+             L"\"%ls\" --remote-input-client %ls --remote-session %lu",
+             executable,
+             endpoint,
+             (unsigned long)configuration.remote_link_session_id);
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    PROCESS_INFORMATION process = {0};
+    if (!CreateProcessW(executable,
+                        command_line,
+                        NULL,
+                        NULL,
+                        FALSE,
+                        0,
+                        NULL,
+                        NULL,
+                        &startup,
+                        &process)) {
+        snprintf(error, error_size, "Could not start Remote Client (Windows error %lu).",
+                 (unsigned long)GetLastError());
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+#else
+    pid_t child = fork();
+    if (child < 0) {
+        snprintf(error, error_size, "Could not start Remote Client: %s", strerror(errno));
+        return false;
+    }
+    if (child == 0) {
+        char session[11];
+        snprintf(session, sizeof(session), "%lu", (unsigned long)configuration.remote_link_session_id);
+        execl("/proc/self/exe",
+              "sameboy",
+              "--remote-input-client",
+              configuration.remote_link_endpoint,
+              "--remote-session",
+              session,
+              (char *)NULL);
+        _exit(127);
+    }
+    return true;
+#endif
+}
+
+static bool start_remote_client_session(void)
+{
+    char error[160];
+    save_active_batteries();
+    save_configuration();
+    if (!launch_remote_client_process(error, sizeof(error))) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "Could not Join Remote Link",
+                                 error,
+                                 window);
+        return false;
+    }
+    exit(0);
+}
+
+static void disconnect_link_session(void)
+{
+    if (game_session.mode == GAME_SESSION_SINGLE_PLAYER) {
+        return;
+    }
+
+    GameSessionMode previous_mode = game_session.mode;
+    save_active_batteries();
+    remote_play_host_stop(&remote_input_host);
+    local_link_disconnect(&local_link);
+    game_session_end_mode(&game_session);
+    screen_size_changed(true);
+    show_osd_text("Link disconnected");
+    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                     "game_session transition=%s->single_player source=menu",
+                     game_session_mode_name(previous_mode));
 }
 
 static void run(void)
@@ -1321,10 +1625,7 @@ static void run(void)
     restart:;
     if (local_link.connected) {
         local_link_disconnect(&local_link);
-        emulator_slot_deinitialize(&game_session.slots[1]);
-        emulator_slot_initialize(&game_session.slots[1]);
-        game_session.active_slot_count = 1;
-        game_session.presentation_slot_count = 1;
+        game_session_deactivate_secondary_slot(&game_session);
     }
     filename = slot->rom_path;
     model = model_to_use();
@@ -1460,7 +1761,8 @@ static void run(void)
     replace_extension(filename, path_length, symbols_path, ".sym");
     GB_debugger_load_symbol_file(gameboy, symbols_path);
 
-    if (local_link_requested) {
+    if (game_session.mode == GAME_SESSION_LOCAL_LINK ||
+        game_session.mode == GAME_SESSION_REMOTE_HOST) {
         if (!initialize_secondary_slot(model, filename) || !local_link_connect(&local_link)) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
                                      "SameBoy Link Error",
@@ -1481,7 +1783,8 @@ static void run(void)
         
     screen_size_changed(local_link.connected && should_resize);
     sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
-                     "game_session active_slots=%u primary_slot=0 capacity=%u",
+                     "game_session mode=%s active_slots=%u primary_slot=0 capacity=%u",
+                     game_session_mode_name(game_session.mode),
                      game_session.active_slot_count,
                      GAME_SESSION_SLOT_CAPACITY);
     sameboy_link_diagnostics_start(gameboy,
@@ -1737,7 +2040,7 @@ int main(int argc, char **argv)
     bool fullscreen = get_arg_flag("--fullscreen", &argc, argv) || get_arg_flag("-f", &argc, argv);
     bool nogl = get_arg_flag("--nogl", &argc, argv);
     stop_on_start = get_arg_flag("--stop-debugger", &argc, argv) || get_arg_flag("-s", &argc, argv);
-    local_link_requested = get_arg_flag("--local-link", &argc, argv) || remote_host_port_string;
+    bool local_link_requested = get_arg_flag("--local-link", &argc, argv);
 
     uint32_t remote_session_id = 1;
     if (remote_session_string &&
@@ -1780,17 +2083,21 @@ int main(int argc, char **argv)
     }
 
     if (remote_client_endpoint) {
-        if (remote_host_port_string || remote_audio_string ||
+        if (local_link_requested || remote_host_port_string || remote_audio_string ||
             remote_host_view_string || argc != 1) {
             print_usage(argv[0]);
             return 1;
         }
-        return remote_play_client_run(remote_client_endpoint, remote_session_id);
+        if (!game_session_begin_mode(&game_session, GAME_SESSION_REMOTE_CLIENT)) {
+            fprintf(stderr, "Could not enter Remote Client session mode.\n");
+            return 1;
+        }
     }
 
     uint32_t remote_host_port = 0;
     if (remote_host_port_string &&
-        (!parse_unsigned_option(remote_host_port_string, 1, UINT16_MAX, &remote_host_port) ||
+        (local_link_requested ||
+         !parse_unsigned_option(remote_host_port_string, 1, UINT16_MAX, &remote_host_port) ||
          argc != 2)) {
         fprintf(stderr, "Remote input host requires a valid UDP port and one ROM.\n");
         print_usage(argv[0]);
@@ -1811,9 +2118,24 @@ int main(int argc, char **argv)
         print_usage(argv[0]);
         return 1;
     }
-    
-    if (argc == 2) {
-        current_emulator_slot()->rom_path = argv[1];
+
+    if (!remote_client_endpoint) {
+        GameSessionMode requested_mode = GAME_SESSION_SINGLE_PLAYER;
+        if (remote_host_port) {
+            requested_mode = GAME_SESSION_REMOTE_HOST;
+        }
+        else if (local_link_requested) {
+            requested_mode = GAME_SESSION_LOCAL_LINK;
+        }
+        if (!game_session_begin_mode(&game_session, requested_mode)) {
+            fprintf(stderr, "Could not enter %s session mode.\n",
+                    game_session_mode_name(requested_mode));
+            return 1;
+        }
+
+        if (argc == 2) {
+            current_emulator_slot()->rom_path = argv[1];
+        }
     }
 
     signal(SIGINT, debugger_interrupt);
@@ -1843,14 +2165,6 @@ int main(int argc, char **argv)
         remote_play_host_set_audio_codec(&remote_input_host, remote_audio_codec);
     }
 
-    if ((console_supported = CON_start(completer))) {
-        CON_set_repeat_empty(true);
-        CON_printf("SameBoy v" GB_VERSION "\n");
-    }
-    else {
-        fprintf(stderr, "SameBoy v" GB_VERSION "\n");
-    }
-    
     strcpy(prefs_path, resource_path("prefs.bin"));
     if (access(prefs_path, R_OK | W_OK) != 0) {
         char *prefs_dir = SDL_GetPrefPath("", "SameBoy");
@@ -1881,9 +2195,28 @@ int main(int argc, char **argv)
         configuration.cgb_revision %= GB_MODEL_CGB_E - GB_MODEL_CGB_0 + 1;
         configuration.audio_driver[15] = 0;
         configuration.dmg_palette_name[24] = 0;
+        configuration.remote_link_endpoint[sizeof(configuration.remote_link_endpoint) - 1] = 0;
+        if (!configuration.remote_link_endpoint[0]) {
+            snprintf(configuration.remote_link_endpoint,
+                     sizeof(configuration.remote_link_endpoint),
+                     "%s",
+                     "127.0.0.1:45930");
+        }
+        if (!configuration.remote_link_port) {
+            configuration.remote_link_port = 45930;
+        }
+        if (!configuration.remote_link_session_id) {
+            configuration.remote_link_session_id = 1;
+        }
+        configuration.remote_client_filter %= 2;
         // Fix broken defaults, keys 12-31 should be unmapped by default
         if (configuration.joypad_configuration[31] == 0) {
             memset(configuration.joypad_configuration + 12 , -1, 32 - 12);
+        }
+        for (unsigned i = 0; i < GB_KEY_MAX; i++) {
+            if ((unsigned)configuration.p2_keys[i] >= SDL_NUM_SCANCODES) {
+                configuration.p2_keys[i] = SDL_SCANCODE_UNKNOWN;
+            }
         }
         if ((configuration.agb_revision & ~GB_MODEL_GBP_BIT) != GB_MODEL_AGB_A) {
             configuration.agb_revision = GB_MODEL_AGB_A;
@@ -1905,8 +2238,26 @@ int main(int argc, char **argv)
     if (model_string) {
         handle_model_option(model_string);
     }
-    
+
     atexit(save_configuration);
+
+    if (remote_client_endpoint) {
+        int client_result = remote_play_client_run(remote_client_endpoint,
+                                                   remote_session_id);
+        if (client_result != REMOTE_PLAY_CLIENT_DISCONNECTED) {
+            return client_result;
+        }
+        game_session_end_mode(&game_session);
+    }
+
+    if ((console_supported = CON_start(completer))) {
+        CON_set_repeat_empty(true);
+        CON_printf("SameBoy v" GB_VERSION "\n");
+    }
+    else {
+        fprintf(stderr, "SameBoy v" GB_VERSION "\n");
+    }
+
     atexit(stop_recording);
     
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -2002,6 +2353,9 @@ int main(int argc, char **argv)
     if (current_emulator_slot()->rom_path == NULL) {
         stop_on_start = false;
         run_gui(false);
+        if (pending_command == GB_SDL_START_REMOTE_CLIENT_COMMAND) {
+            handle_pending_command();
+        }
     }
     else {
         connect_joypad();

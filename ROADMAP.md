@@ -111,6 +111,28 @@ Candidate backends include raw/reference transport, fast lossless compression, t
 
 ---
 
+## Current cross-phase milestone — UI and session integration
+
+**Status:** Implementation complete; final physical four-mode regression in progress (2026-08-18).
+
+**Goal:** convert the proven CLI backends into the intended SameBoy interaction model before expanding Internet coordination.
+
+Deliverables:
+
+- explicit `SINGLE_PLAYER`, `LOCAL_LINK`, `REMOTE_HOST` and `REMOTE_CLIENT` session modes;
+- one lifecycle/transition API owned by `GameSession`;
+- a dedicated `Link` menu in the normal SameBoy interface;
+- independent persistent P1/P2 keyboard and controller mappings;
+- Local Link, Host, Join and Disconnect actions backed by the existing implementations;
+- retained CLI entry points for regression and developer testing.
+- a Remote Client Escape menu for local video/audio/P2-control settings and clean return to the idle frontend.
+
+**Exit criterion:** all four roles are selectable in the same executable, normal single-player behavior remains intact, and Disconnect releases link/network/input state cleanly.
+
+See `LINK_UI_ARCHITECTURE.md` for the design contract. Automated build, loopback, menu and Disconnect checks pass. Final physical Host/Join verification, full client shader reuse, visual polish, packaging and compatibility work remain.
+
+---
+
 ## Phase 5 — Internet coordination
 
 **Goal:** remove manual IP/port exchange.

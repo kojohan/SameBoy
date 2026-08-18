@@ -5,10 +5,8 @@
 #include <stdbool.h> 
 #include "shader.h"
 #include "configuration.h"
+#include "controller_input.h"
 #include "session/game_session.h"
-
-#define JOYSTICK_HIGH 0x4000
-#define JOYSTICK_LOW 0x3800
 
 #ifdef __APPLE__
 #define MODIFIER KMOD_GUI
@@ -55,6 +53,10 @@ enum pending_command {
     GB_SDL_QUIT_COMMAND,
     GB_SDL_LOAD_STATE_FROM_FILE_COMMAND,
     GB_SDL_CART_SWAP_COMMAND,
+    GB_SDL_START_LOCAL_LINK_COMMAND,
+    GB_SDL_START_REMOTE_HOST_COMMAND,
+    GB_SDL_START_REMOTE_CLIENT_COMMAND,
+    GB_SDL_DISCONNECT_LINK_COMMAND,
     GB_SDL_DEBUGGER_INTERRUPT_COMMAND,
 #ifdef _WIN32
     GB_SDL_HIDE_DEBUGGER_COMMAND,
@@ -70,13 +72,13 @@ extern bool screen_manually_resized;
 
 void update_viewport(void);
 void run_gui(bool is_running);
+enum pending_command run_remote_client_gui(void);
 void render_texture(void *pixels, void *previous);
-void connect_joypad(void);
 
 joypad_button_t get_joypad_button(uint8_t physical_button);
 joypad_axis_t get_joypad_axis(uint8_t physical_axis);
 
-static SDL_Scancode event_hotkey_code(SDL_Event *event)
+static inline SDL_Scancode event_hotkey_code(SDL_Event *event)
 {
     if (event->key.keysym.sym >= SDLK_a && event->key.keysym.sym < SDLK_z) {
         return SDL_SCANCODE_A + event->key.keysym.sym - SDLK_a;

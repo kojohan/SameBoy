@@ -168,6 +168,19 @@ typedef struct {
         
         /* v1.0.3 */
         uint8_t rumble_strength;
+
+        /* SameBoy Link */
+        SDL_Scancode p2_keys[GB_KEY_MAX];
+        uint8_t p2_joypad_configuration[32];
+        uint8_t p2_joypad_axises[JOYPAD_AXISES_MAX];
+        uint8_t player_joypad_indices[2];
+        char remote_link_endpoint[64];
+        uint32_t remote_link_session_id;
+        uint16_t remote_link_port;
+        bool remote_link_host_show_p2;
+        uint8_t remote_client_filter;
+        bool remote_client_muted;
+        bool remote_client_fullscreen;
     };
 } configuration_t;
 

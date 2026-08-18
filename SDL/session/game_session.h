@@ -5,8 +5,17 @@
 
 #define GAME_SESSION_SLOT_CAPACITY 2
 
+typedef enum {
+    GAME_SESSION_SINGLE_PLAYER,
+    GAME_SESSION_LOCAL_LINK,
+    GAME_SESSION_REMOTE_HOST,
+    GAME_SESSION_REMOTE_CLIENT,
+    GAME_SESSION_MODE_COUNT,
+} GameSessionMode;
+
 typedef struct {
     EmulatorSlot slots[GAME_SESSION_SLOT_CAPACITY];
+    GameSessionMode mode;
     unsigned active_slot_count;
     unsigned presentation_slot_count;
     uint32_t composite_framebuffer[GAME_SESSION_SLOT_CAPACITY *
@@ -25,6 +34,11 @@ typedef struct {
 
 void game_session_initialize(GameSession *session);
 void game_session_deinitialize(GameSession *session);
+const char *game_session_mode_name(GameSessionMode mode);
+bool game_session_begin_mode(GameSession *session, GameSessionMode mode);
+bool game_session_activate_secondary_slot(GameSession *session);
+void game_session_deactivate_secondary_slot(GameSession *session);
+void game_session_end_mode(GameSession *session);
 EmulatorSlot *game_session_primary_slot(GameSession *session);
 GB_gameboy_t *game_session_primary_core(GameSession *session);
 EmulatorSlot *game_session_find_slot(GameSession *session, const GB_gameboy_t *gameboy);

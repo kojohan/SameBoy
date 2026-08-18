@@ -31,6 +31,23 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Test at least one CGB link game.
 - [x] Run extended session test for drift/crashes/save corruption.
 
+## Current — UI and session integration
+
+- [x] Add explicit `SINGLE_PLAYER`, `LOCAL_LINK`, `REMOTE_HOST` and `REMOTE_CLIENT` modes to `GameSession`.
+- [x] Centralize valid session start/stop transitions and teardown.
+- [x] Route existing CLI modes through the same session lifecycle API.
+- [x] Add a dedicated `Link` submenu to SameBoy's existing SDL menu system.
+- [x] Add `Local Link…`, `Host Remote Link…`, `Join Remote Link…`, `Disconnect` and `Remote Link Settings…` actions.
+- [x] Add independent persistent keyboard mappings for P1 and P2.
+- [x] Add independent persistent controller selection/mappings for P1 and P2.
+- [x] Use both local mappings in Local Link and the client P2 mapping in Remote Play.
+- [x] Wire Local Link, Host and Join menu actions to the existing backends.
+- [x] Ensure `Disconnect` releases network/link/input state and returns to a clean session.
+- [x] Keep CLI modes working as developer/regression entry points.
+- [x] Add a Remote Client Escape menu with persistent local video/audio/P2-control settings.
+- [x] Return Remote Client to the ordinary idle frontend after Disconnect.
+- [ ] Regression-test all four modes plus ordinary single-player.
+
 ## LAN Remote Play
 
 - [x] Define protocol version and session identifiers.
@@ -134,8 +151,8 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 
 ## Release/polish
 
-- [ ] Simple top-level UI: Play / Local Link / Host Online / Join Online / Settings.
-- [ ] Controller assignment UI.
+- [ ] Polish the normal SameBoy `Link` menu and session dialogs.
+- [ ] Polish P1/P2 controller assignment and validation feedback.
 - [ ] Connection-status UI.
 - [ ] Quality preset UI.
 - [ ] Compatibility matrix.

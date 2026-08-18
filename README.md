@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Remote Play is playable and measured between an Ethernet host and Wi-Fi client, and a five-minute manual public-IPv4/UDP port-forwarding test has succeeded. PCM is the current stable audio baseline; Phase 4 now focuses on Internet-oriented video transport. Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls and the Remote Client menu are integrated into the normal SDL frontend. Remote Play is playable over LAN and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -53,6 +53,17 @@ Host Online Game -> Copy Invite Link -> friend clicks -> SameBoy Link opens -> C
 
 The connection layer is planned to support direct IPv6/UDP, NAT traversal/hole punching, UPnP IGD, NAT-PMP, PCP and relay fallback so users normally never need to configure their router manually.
 
+### Current direct-IP development flow
+
+Until room codes and automatic connectivity are implemented:
+
+1. The host opens a ROM and chooses `Link > Remote Link Settings…` to set the UDP port and shared session ID.
+2. The host chooses `Link > Host Remote Link…`.
+3. The client chooses `Link > Join Remote Link…`, enters `IP:port` and uses the same session ID.
+4. The client presses Escape for local video, audio and P2 control settings. `Disconnect` returns to the ordinary SameBoy start window.
+
+Internet testing currently requires manual UDP forwarding of the selected host port. Only the host needs the ROM.
+
 ## Streaming goals
 
 The remote client receives Player 2's **native Game Boy framebuffer**, not a pre-scaled desktop capture.
@@ -73,6 +84,7 @@ Start here depending on what you want to know:
 - **[TODO.md](TODO.md)** — actionable development checklist.
 - **[DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)** — completed work, measurements and regression evidence.
 - **[build-faq.md](build-faq.md)** — Windows prerequisites and the one-command build script.
+- **[LINK_UI_ARCHITECTURE.md](LINK_UI_ARCHITECTURE.md)** — target Link menu, session modes and P1/P2 control ownership.
 - **[TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md)** — contributor-friendly architecture overview.
 - **[SAMEBOY_LINK_TECHNICAL_PLAN.md](SAMEBOY_LINK_TECHNICAL_PLAN.md)** — detailed implementation decisions and technical notes.
 - **[SAMEBOY_LINK_PLAN.md](SAMEBOY_LINK_PLAN.md)** — product/feature planning notes.
@@ -81,15 +93,14 @@ Start here depending on what you want to know:
 ## Current implementation priority
 
 The completed foundation now includes the reproducible Windows build, dual-core
-Local Link, measured LAN Remote Play, adaptive PCM audio, a dedicated client
-network thread, a resizable P2 window and a P1-only host view. The immediate
-development order is now:
+Local Link, explicit session modes, persistent independent controls, menu-driven
+Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
+settings-capable Remote Client. The immediate development order is now:
 
-1. optimize and pace video traffic for Internet links;
-2. add authenticated and encrypted realtime sessions;
-3. add Internet coordination, NAT traversal and relay fallback;
-4. add polished host/join, controller, shader and quality-selection UI;
-5. optimize latency based on physical Internet measurements.
+1. physically regression-test the completed four-mode UI/session flow on both PCs;
+2. reuse the full SameBoy shader/filter presentation path in Remote Client and improve Internet video pacing;
+3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback;
+4. optimize latency based on further physical Internet measurements.
 
 See [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.
 

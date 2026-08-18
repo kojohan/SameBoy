@@ -20,4 +20,7 @@ bool multiplayer_input_button_for_scancode(SDL_Scancode scancode, uint16_t *butt
 bool multiplayer_input_button_for_remote_scancode(SDL_Scancode scancode, uint16_t *button);
 uint16_t multiplayer_input_current_button_mask(const GameSession *session);
 void multiplayer_input_apply_button_mask(GameSession *session, uint16_t buttons);
+void multiplayer_input_set_button_state(GameSession *session,
+                                         uint16_t button,
+                                         bool pressed);
 bool multiplayer_input_handle_keyboard_event(GameSession *session, const SDL_KeyboardEvent *event);

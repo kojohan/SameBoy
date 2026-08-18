@@ -10,6 +10,8 @@
 #endif
 
 #include "../session/multiplayer_input.h"
+#include "../controller_input.h"
+#include "../gui.h"
 #include "protocol.h"
 #include "transport_udp.h"
 #include "video_codec.h"
@@ -26,6 +28,16 @@
 #define REMOTE_AUDIO_MAX_RATE_CORRECTION 0.002
 
 static uint64_t client_start_time_us;
+
+static void set_button_state(uint16_t *buttons, uint16_t button, bool pressed)
+{
+    if (pressed) {
+        *buttons |= button;
+    }
+    else {
+        *buttons &= ~button;
+    }
+}
 
 typedef struct {
     uint32_t input_sequence;
@@ -273,16 +285,26 @@ static void render_client(SDL_Renderer *renderer,
         SDL_GetRendererOutputSize(renderer, &output_width, &output_height);
         if (texture_width > 0 && texture_height > 0 &&
             output_width > 0 && output_height > 0) {
-            video_destination.w = output_width;
-            video_destination.h = (int)((int64_t)output_width * texture_height /
-                                        texture_width);
-            if (video_destination.h > output_height) {
+            if (configuration.scaling_mode == GB_SDL_SCALING_ENTIRE_WINDOW) {
+                video_destination.w = output_width;
                 video_destination.h = output_height;
-                video_destination.w = (int)((int64_t)output_height * texture_width /
-                                            texture_height);
+            }
+            else {
+                double scale_x = (double)output_width / texture_width;
+                double scale_y = (double)output_height / texture_height;
+                double scale = scale_x < scale_y? scale_x : scale_y;
+                if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR &&
+                    scale >= 1.0) {
+                    scale = (unsigned)scale;
+                }
+                video_destination.w = (int)(texture_width * scale);
+                video_destination.h = (int)(texture_height * scale);
             }
             video_destination.x = (output_width - video_destination.w) / 2;
             video_destination.y = (output_height - video_destination.h) / 2;
+            SDL_SetTextureScaleMode(video_texture,
+                                    configuration.remote_client_filter?
+                                        SDL_ScaleModeLinear : SDL_ScaleModeNearest);
             SDL_RenderCopy(renderer, video_texture, NULL, &video_destination);
         }
     }
@@ -407,8 +429,14 @@ static void remote_audio_callback(void *userdata, uint8_t *stream, int byte_coun
         for (unsigned channel = 0; channel < 2; channel++) {
             int16_t first = receiver->ring_samples[current * 2 + channel];
             int16_t second = receiver->ring_samples[next * 2 + channel];
-            output[frames_written * 2 + channel] =
-                (int16_t)(first + (second - first) * fraction);
+            int sample = (int)(first + (second - first) * fraction);
+            if (configuration.remote_client_muted) {
+                sample = 0;
+            }
+            else {
+                sample = sample * configuration.volume / 100;
+            }
+            output[frames_written * 2 + channel] = (int16_t)sample;
         }
 
         receiver->resample_phase += input_frames_per_output;
@@ -1102,6 +1130,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
         return 1;
     }
     client_start_time_us = monotonic_time_us();
+    connect_joypad();
 
     RemoteUdpSocket transport;
     char error[128];
@@ -1113,7 +1142,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
 
     char title[512];
     snprintf(title, sizeof(title),
-             "SameBoy Link Remote P2 - %s - Arrows, Z/X, Backspace/Enter",
+             "SameBoy Link Remote P2 - %s - Configured P2 controls",
              endpoint);
     SDL_Window *client_window = SDL_CreateWindow(title,
                                                   SDL_WINDOWPOS_CENTERED,
@@ -1134,7 +1163,32 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
         SDL_Quit();
         return 1;
     }
+    window = client_window;
+    renderer = client_renderer;
+    texture = SDL_CreateTexture(client_renderer,
+                                SDL_PIXELFORMAT_ABGR8888,
+                                SDL_TEXTUREACCESS_STREAMING,
+                                160,
+                                144);
+    pixel_format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
+    if (!texture || !pixel_format) {
+        fprintf(stderr, "Could not create remote client menu resources: %s\n", SDL_GetError());
+        if (texture) SDL_DestroyTexture(texture);
+        if (pixel_format) SDL_FreeFormat(pixel_format);
+        texture = NULL;
+        pixel_format = NULL;
+        renderer = NULL;
+        window = NULL;
+        SDL_DestroyRenderer(client_renderer);
+        SDL_DestroyWindow(client_window);
+        remote_udp_close(&transport);
+        SDL_Quit();
+        return 1;
+    }
     SDL_SetWindowMinimumSize(client_window, 160, 144);
+    if (configuration.remote_client_fullscreen) {
+        SDL_SetWindowFullscreen(client_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    }
     SDL_Texture *video_texture = NULL;
     unsigned texture_width = 0;
     unsigned texture_height = 0;
@@ -1146,6 +1200,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
             REMOTE_PLAY_PROTOCOL_VERSION);
 
     bool running = true;
+    bool disconnected_to_frontend = false;
     bool render_needed = false;
     uint16_t buttons = 0;
     uint64_t last_input_event_time = monotonic_time_us();
@@ -1184,6 +1239,12 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
         if (audio.decoder) opus_decoder_destroy(audio.decoder);
 #endif
         SDL_free(audio.ring_samples);
+        SDL_DestroyTexture(texture);
+        SDL_FreeFormat(pixel_format);
+        texture = NULL;
+        pixel_format = NULL;
+        renderer = NULL;
+        window = NULL;
         SDL_DestroyRenderer(client_renderer);
         SDL_DestroyWindow(client_window);
         remote_udp_close(&transport);
@@ -1194,10 +1255,36 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT ||
-                (event.type == SDL_KEYDOWN && event.key.keysym.scancode == SDL_SCANCODE_ESCAPE)) {
+            if (event.type == SDL_QUIT) {
                 running = false;
                 break;
+            }
+            if (event.type == SDL_KEYDOWN &&
+                event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                if (buttons) {
+                    buttons = 0;
+                    last_input_event_time = monotonic_time_us();
+                    SDL_LockMutex(network_mutex);
+                    network.buttons = buttons;
+                    network.input_event_timestamp_us = last_input_event_time;
+                    network.input_changed = true;
+                    SDL_UnlockMutex(network_mutex);
+                }
+                SDL_RenderSetViewport(client_renderer, NULL);
+                enum pending_command menu_command = run_remote_client_gui();
+                SDL_RenderSetViewport(client_renderer, NULL);
+                SDL_ShowCursor(SDL_DISABLE);
+                if (menu_command == GB_SDL_DISCONNECT_LINK_COMMAND) {
+                    disconnected_to_frontend = true;
+                    running = false;
+                    break;
+                }
+                if (menu_command == GB_SDL_QUIT_COMMAND) {
+                    running = false;
+                    break;
+                }
+                render_needed = true;
+                continue;
             }
             if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                 if (buttons) {
@@ -1218,23 +1305,95 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
                 render_needed = true;
                 continue;
             }
-            if ((event.type != SDL_KEYDOWN && event.type != SDL_KEYUP) || event.key.repeat) {
+            if (event.type == SDL_JOYDEVICEADDED ||
+                event.type == SDL_JOYDEVICEREMOVED) {
+                connect_joypad();
                 continue;
             }
 
-            uint16_t button;
-            if (!multiplayer_input_button_for_remote_scancode(event.key.keysym.scancode,
-                                                               &button)) {
-                continue;
-            }
             uint16_t previous_buttons = buttons;
-            if (event.type == SDL_KEYDOWN) {
-                buttons |= button;
+            bool input_handled = false;
+            if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+                !event.key.repeat) {
+                uint16_t button;
+                if (multiplayer_input_button_for_remote_scancode(
+                        event.key.keysym.scancode,
+                        &button)) {
+                    set_button_state(&buttons, button, event.type == SDL_KEYDOWN);
+                    input_handled = true;
+                }
             }
-            else {
-                buttons &= ~button;
+            else if (event.type == SDL_JOYBUTTONDOWN ||
+                     event.type == SDL_JOYBUTTONUP) {
+                if (joypad_player_for_instance(event.jbutton.which) >= 0) {
+                    joypad_button_t button = get_player_joypad_button(
+                        1,
+                        event.jbutton.button);
+                    if ((GB_key_t)button < GB_KEY_MAX) {
+                        set_button_state(&buttons,
+                                         (uint16_t)(1u << button),
+                                         event.type == SDL_JOYBUTTONDOWN);
+                        input_handled = true;
+                    }
+                }
             }
-            if (buttons != previous_buttons) {
+            else if (event.type == SDL_JOYAXISMOTION &&
+                     joypad_player_for_instance(event.jaxis.which) >= 0) {
+                joypad_axis_t axis = get_player_joypad_axis(1, event.jaxis.axis);
+                if (axis == JOYPAD_AXISES_X) {
+                    if (event.jaxis.value > JOYSTICK_HIGH) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_RIGHT, true);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_LEFT, false);
+                    }
+                    else if (event.jaxis.value < -JOYSTICK_HIGH) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_RIGHT, false);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_LEFT, true);
+                    }
+                    else if (event.jaxis.value < JOYSTICK_LOW &&
+                             event.jaxis.value > -JOYSTICK_LOW) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_RIGHT, false);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_LEFT, false);
+                    }
+                    input_handled = true;
+                }
+                else if (axis == JOYPAD_AXISES_Y) {
+                    if (event.jaxis.value > JOYSTICK_HIGH) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_DOWN, true);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_UP, false);
+                    }
+                    else if (event.jaxis.value < -JOYSTICK_HIGH) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_DOWN, false);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_UP, true);
+                    }
+                    else if (event.jaxis.value < JOYSTICK_LOW &&
+                             event.jaxis.value > -JOYSTICK_LOW) {
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_DOWN, false);
+                        set_button_state(&buttons, MULTIPLAYER_BUTTON_UP, false);
+                    }
+                    input_handled = true;
+                }
+            }
+            else if (event.type == SDL_JOYHATMOTION &&
+                     joypad_player_for_instance(event.jhat.which) >= 0) {
+                uint8_t value = event.jhat.value;
+                int8_t updown =
+                    value == SDL_HAT_LEFTUP || value == SDL_HAT_UP ||
+                    value == SDL_HAT_RIGHTUP? -1 :
+                    (value == SDL_HAT_LEFTDOWN || value == SDL_HAT_DOWN ||
+                     value == SDL_HAT_RIGHTDOWN? 1 : 0);
+                int8_t leftright =
+                    value == SDL_HAT_LEFTUP || value == SDL_HAT_LEFT ||
+                    value == SDL_HAT_LEFTDOWN? -1 :
+                    (value == SDL_HAT_RIGHTUP || value == SDL_HAT_RIGHT ||
+                     value == SDL_HAT_RIGHTDOWN? 1 : 0);
+                set_button_state(&buttons, MULTIPLAYER_BUTTON_LEFT, leftright == -1);
+                set_button_state(&buttons, MULTIPLAYER_BUTTON_RIGHT, leftright == 1);
+                set_button_state(&buttons, MULTIPLAYER_BUTTON_UP, updown == -1);
+                set_button_state(&buttons, MULTIPLAYER_BUTTON_DOWN, updown == 1);
+                input_handled = true;
+            }
+
+            if (input_handled && buttons != previous_buttons) {
                 last_input_event_time = monotonic_time_us();
                 SDL_LockMutex(network_mutex);
                 network.buttons = buttons;
@@ -1378,10 +1537,19 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     if (video_texture) {
         SDL_DestroyTexture(video_texture);
     }
+    SDL_DestroyTexture(texture);
+    SDL_FreeFormat(pixel_format);
+    texture = NULL;
+    pixel_format = NULL;
+    renderer = NULL;
+    window = NULL;
     SDL_DestroyMutex(network_mutex);
     SDL_DestroyRenderer(client_renderer);
     SDL_DestroyWindow(client_window);
     remote_udp_close(&transport);
-    SDL_Quit();
-    return 0;
+    if (!disconnected_to_frontend) {
+        SDL_Quit();
+        return 0;
+    }
+    return REMOTE_PLAY_CLIENT_DISCONNECTED;
 }

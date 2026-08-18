@@ -2,11 +2,11 @@
 
 A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy Color Link Cable multiplayer.
 
-## Implementation checkpoint — 2026-08-17
+## Implementation checkpoint — 2026-08-18
 
-The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. Protocol v4 now provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread, latency telemetry, a resizable Player 2 window and an independent Player 1-only host view. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
+The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v4 provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread and latency telemetry. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
 
-PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The next implementation work is client-side reuse of SameBoy's shader/filter pipeline, improved video pacing and compression, followed by authenticated/encrypted sessions and zero-configuration Internet connectivity.
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` is implemented and awaits final physical four-mode regression. Full client shader/filter reuse and video pacing are next, before authenticated/encrypted sessions and zero-configuration Internet connectivity.
 
 ## Product direction
 
@@ -371,7 +371,8 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 
 ## Next implementation tasks
 
-1. Reuse SameBoy's shader/filter pipeline in the Remote Play client.
-2. Improve video pacing and evaluate low-latency compression without regressing the lossless reference path.
-3. Add session authentication and encryption before treating direct Internet play as a public feature.
-4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.
+1. Complete physical regression of single-player, Local Link, Remote Host and Remote Client UI flows.
+2. Reuse SameBoy's full shader/filter pipeline in the Remote Play client.
+3. Improve video pacing and evaluate low-latency compression without regressing the lossless reference path.
+4. Add session authentication and encryption before treating direct Internet play as a public feature.
+5. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

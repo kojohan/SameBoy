@@ -7,6 +7,7 @@ void game_session_initialize(GameSession *session)
     for (unsigned i = 0; i < GAME_SESSION_SLOT_CAPACITY; i++) {
         emulator_slot_initialize(&session->slots[i]);
     }
+    session->mode = GAME_SESSION_SINGLE_PLAYER;
     session->active_slot_count = 1;
     session->presentation_slot_count = 1;
 }
@@ -18,6 +19,81 @@ void game_session_deinitialize(GameSession *session)
     }
     session->active_slot_count = 0;
     session->presentation_slot_count = 0;
+    session->mode = GAME_SESSION_SINGLE_PLAYER;
+}
+
+const char *game_session_mode_name(GameSessionMode mode)
+{
+    static const char *names[] = {
+        [GAME_SESSION_SINGLE_PLAYER] = "single_player",
+        [GAME_SESSION_LOCAL_LINK] = "local_link",
+        [GAME_SESSION_REMOTE_HOST] = "remote_host",
+        [GAME_SESSION_REMOTE_CLIENT] = "remote_client",
+    };
+    if ((unsigned)mode >= GAME_SESSION_MODE_COUNT) {
+        return "invalid";
+    }
+    return names[mode];
+}
+
+bool game_session_begin_mode(GameSession *session, GameSessionMode mode)
+{
+    if (!session || (unsigned)mode >= GAME_SESSION_MODE_COUNT ||
+        session->mode != GAME_SESSION_SINGLE_PLAYER ||
+        session->active_slot_count != 1 ||
+        session->presentation_slot_count != 1) {
+        return false;
+    }
+
+    if (mode == GAME_SESSION_SINGLE_PLAYER) {
+        return true;
+    }
+
+    session->mode = mode;
+    if (mode == GAME_SESSION_REMOTE_CLIENT) {
+        session->active_slot_count = 0;
+        session->presentation_slot_count = 0;
+    }
+    return true;
+}
+
+bool game_session_activate_secondary_slot(GameSession *session)
+{
+    if (!session ||
+        (session->mode != GAME_SESSION_LOCAL_LINK &&
+         session->mode != GAME_SESSION_REMOTE_HOST) ||
+        session->active_slot_count != 1 ||
+        !GB_is_inited(&session->slots[1].gameboy)) {
+        return false;
+    }
+
+    session->active_slot_count = 2;
+    session->presentation_slot_count = 2;
+    return true;
+}
+
+void game_session_deactivate_secondary_slot(GameSession *session)
+{
+    if (!session) {
+        return;
+    }
+
+    emulator_slot_deinitialize(&session->slots[1]);
+    emulator_slot_initialize(&session->slots[1]);
+    session->active_slot_count = 1;
+    session->presentation_slot_count = 1;
+}
+
+void game_session_end_mode(GameSession *session)
+{
+    if (!session) {
+        return;
+    }
+
+    game_session_deactivate_secondary_slot(session);
+    session->mode = GAME_SESSION_SINGLE_PLAYER;
+    session->active_slot_count = 1;
+    session->presentation_slot_count = 1;
 }
 
 EmulatorSlot *game_session_primary_slot(GameSession *session)
@@ -77,6 +153,9 @@ bool game_session_set_presentation_slot_count(GameSession *session,
 
 unsigned game_session_presentation_width(GameSession *session)
 {
+    if (!session->presentation_slot_count) {
+        return 160;
+    }
     unsigned width = 0;
     for (unsigned i = 0; i < session->presentation_slot_count; i++) {
         width += GB_get_screen_width(&session->slots[i].gameboy);
@@ -86,6 +165,9 @@ unsigned game_session_presentation_width(GameSession *session)
 
 unsigned game_session_presentation_height(GameSession *session)
 {
+    if (!session->presentation_slot_count) {
+        return 144;
+    }
     unsigned height = 0;
     for (unsigned i = 0; i < session->presentation_slot_count; i++) {
         unsigned slot_height = GB_get_screen_height(&session->slots[i].gameboy);
