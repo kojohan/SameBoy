@@ -34,6 +34,33 @@ User-facing terminology should prefer **Host** and **Join** rather than requirin
 
 `Disconnect` is disabled when no link session is active. Other menu items should be enabled/disabled according to the current session state rather than allowing conflicting modes to start simultaneously.
 
+## Controller mapping
+
+SameBoy Link should reuse SameBoy's normal controller/input configuration UI rather than introducing a separate configuration system for multiplayer.
+
+The normal control-mapping interface should expose Player 1 and Player 2 as separate selectable mappings, conceptually:
+
+```text
+Controls
+├─ Map Controls P1…
+└─ Map Controls P2…
+```
+
+The exact placement and wording may follow the existing SameBoy UI conventions, but P1 and P2 must be independently configurable.
+
+Requirements:
+
+- Player 1 and Player 2 have separate persistent input mappings;
+- keyboard and supported game controllers can be assigned independently to either player;
+- Local Link uses both mappings on the same computer;
+- Remote Host uses the P1 mapping locally and receives P2 gameplay input from the network;
+- Remote Client uses its local P2 mapping to generate the input state sent to the host;
+- changing P2 controls should use the same mapping workflow and UI conventions as ordinary SameBoy controls;
+- the temporary hard-coded P2 keyboard mapping used by the developer prototype must not be the final user-facing solution;
+- single-player behavior and the existing P1 mapping should remain compatible with normal SameBoy usage.
+
+The intent is that a user who already understands how to configure controls in SameBoy should configure multiplayer controls in the same place and in the same way, with the only meaningful addition being a P1/P2 selection.
+
 ## Session modes
 
 The frontend should have an explicit session-mode concept equivalent to:
@@ -62,7 +89,7 @@ Two Game Boy instances run inside the same SameBoy process.
 - two active `EmulatorSlot` objects;
 - `LocalLink` connects their emulated serial/link interfaces;
 - dual-core scheduler keeps both cores synchronized;
-- independent Player 1 and Player 2 controls;
+- independent Player 1 and Player 2 controls using the configured P1/P2 mappings;
 - independent cartridge persistence/save paths;
 - both screens are presented locally;
 - both players are controlled on the host PC.
@@ -75,7 +102,7 @@ The host runs **both** Game Boy instances. The emulated Game Boy link cable ther
 
 - two active `EmulatorSlot` objects on the host;
 - the two cores use the same `LocalLink` and synchronized scheduler as Local Link;
-- Player 1 input is local;
+- Player 1 input uses the host's configured P1 mapping;
 - Player 2 input comes from the Remote Client;
 - Player 2's completed framebuffer is streamed to the client;
 - Player 2 audio is streamed to the client;
@@ -93,7 +120,7 @@ For Remote Play V1 the client **does not run a Game Boy core**.
 - receives Player 2 video from the host;
 - receives Player 2 audio from the host;
 - renders through the SameBoy/SDL frontend path where practical;
-- captures local Player 2 controller/keyboard input;
+- captures local Player 2 input using the configured P2 mapping;
 - sends Player 2 input state to the host;
 - shows connection and latency diagnostics as appropriate;
 - owns no ROM or Game Boy save state in V1.
@@ -141,7 +168,7 @@ Target flow:
 1. User chooses `Link > Local Link…`.
 2. SameBoy obtains the ROM(s) required for Player 1 and Player 2.
 3. A two-slot `GameSession` starts.
-4. Controller/input assignment is applied.
+4. The configured P1/P2 controller mappings are applied.
 5. Both linked screens are presented locally.
 6. `Link > Disconnect` returns to a clean non-linked state.
 
@@ -156,9 +183,10 @@ Target flow:
 3. Host obtains a room/invite code once Internet coordination is implemented.
 4. The host runs both Game Boy cores locally.
 5. Player 2 connects remotely.
-6. P2 input/video/audio use the existing Remote Play transport pipeline.
-7. The Game Boy serial link remains local between the two host cores.
-8. Disconnect cleanly releases remote input and preserves host-owned persistence.
+6. P1 uses the host's normal configured P1 controls; P2 input comes from the connected client.
+7. P2 input/video/audio use the existing Remote Play transport pipeline.
+8. The Game Boy serial link remains local between the two host cores.
+9. Disconnect cleanly releases remote input and preserves host-owned persistence.
 
 During the transition from developer prototype to Internet service, direct-IP connection may remain available as a developer/advanced option.
 
@@ -170,7 +198,7 @@ Target flow:
 2. User enters/pastes an invite code/link, or an advanced direct endpoint during development.
 3. SameBoy resolves/connects to the host.
 4. The normal application window becomes the Player 2 remote presentation.
-5. Local P2 input is sent to the host.
+5. The client's configured P2 controls generate the input state sent to the host.
 6. Video/audio are received and presented locally.
 7. Disconnect returns SameBoy to its normal idle/single-player frontend state.
 
@@ -242,12 +270,13 @@ Priority:
 
 1. introduce/normalize explicit `GameSession` session modes;
 2. add the `Link` menu to the SDL frontend;
-3. wire `Local Link…` to the existing Local Link backend;
-4. wire `Host Remote Link…` to the existing Remote Host backend;
-5. wire `Join Remote Link…` to the existing Remote Client backend;
-6. implement clean session teardown/`Disconnect` behavior;
-7. retain CLI entry points for automated/developer testing;
-8. then continue room-code/coordination/NAT-traversal work against these stable UI/session boundaries.
+3. expose separate `Map Controls P1` and `Map Controls P2` configuration through SameBoy's existing control UI;
+4. wire `Local Link…` to the existing Local Link backend and both configured control mappings;
+5. wire `Host Remote Link…` to the existing Remote Host backend;
+6. wire `Join Remote Link…` to the existing Remote Client backend and P2 mapping;
+7. implement clean session teardown/`Disconnect` behavior;
+8. retain CLI entry points for automated/developer testing;
+9. then continue room-code/coordination/NAT-traversal work against these stable UI/session boundaries.
 
 ## Acceptance criteria for the UI/session milestone
 
@@ -255,6 +284,9 @@ The milestone is complete when:
 
 - ordinary SameBoy single-player still behaves normally;
 - one executable provides all four session roles;
+- SameBoy's normal controls UI allows P1 and P2 mappings to be configured independently;
+- Local Link uses the configured P1 and P2 mappings without requiring hard-coded developer keys;
+- Remote Client uses its configured P2 mapping for remote gameplay input;
 - Local Link can be started from the `Link` menu without command-line arguments;
 - Remote Host can be started from the `Link` menu without command-line arguments;
 - Remote Client can be started/joined from the `Link` menu without command-line arguments;
@@ -274,5 +306,7 @@ The following are intentional project decisions unless explicitly revisited:
 4. Remote Play V1 runs both Game Boy cores on the host.
 5. The Remote Client is a streaming/input endpoint and does not emulate a Game Boy in V1.
 6. Local Link and Remote Host share the local dual-core/link scheduler implementation.
-7. Developer CLI modes remain useful test paths but are not the intended end-user UX.
-8. Native link-over-network is a later optional mode and must not block the Remote Play product path.
+7. P1 and P2 controls are independently configurable through SameBoy's normal control-mapping UI.
+8. Local Link uses both local mappings; Remote Client uses the P2 mapping for the input it sends to the host.
+9. Developer CLI modes remain useful test paths but are not the intended end-user UX.
+10. Native link-over-network is a later optional mode and must not block the Remote Play product path.
