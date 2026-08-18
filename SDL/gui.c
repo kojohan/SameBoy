@@ -2641,12 +2641,30 @@ static void enter_remote_client_menu(unsigned index);
 
 static const char *remote_client_filter_string(unsigned index)
 {
+    if (uses_gl()) {
+        return current_filter_name(index);
+    }
     return configuration.remote_client_filter? "Bilinear" : "Nearest Neighbor";
 }
 
-static void toggle_remote_client_filter(unsigned index)
+static void cycle_remote_client_filter(unsigned index)
 {
-    configuration.remote_client_filter ^= 1;
+    if (uses_gl()) {
+        cycle_filter(index);
+    }
+    else {
+        configuration.remote_client_filter ^= 1;
+    }
+}
+
+static void cycle_remote_client_filter_backwards(unsigned index)
+{
+    if (uses_gl()) {
+        cycle_filter_backwards(index);
+    }
+    else {
+        configuration.remote_client_filter ^= 1;
+    }
 }
 
 static void cycle_remote_client_scale(unsigned index)
@@ -2710,7 +2728,7 @@ static void toggle_remote_client_mute(unsigned index)
 
 static const struct menu_item remote_client_video_menu[] = {
     {"Scaling Mode:", cycle_remote_client_scale, current_scaling_mode, cycle_remote_client_scale_backwards},
-    {"Scaling Filter:", toggle_remote_client_filter, remote_client_filter_string, toggle_remote_client_filter},
+    {"Scaling Filter:", cycle_remote_client_filter, remote_client_filter_string, cycle_remote_client_filter_backwards},
     {"Window Scale:", cycle_remote_client_window_scale, current_default_scale, cycle_remote_client_window_scale_backwards},
     {"Fullscreen:", toggle_remote_client_fullscreen, remote_client_fullscreen_string, toggle_remote_client_fullscreen},
     {"Back", enter_remote_client_menu},

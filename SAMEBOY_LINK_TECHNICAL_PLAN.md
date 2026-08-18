@@ -6,7 +6,7 @@ This document translates the product roadmap into concrete implementation work a
 
 T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. Explicit `GameSession` modes now route CLI and menu entry points through controlled lifecycle transitions. The normal `Link` menu starts Local Link or direct-IP Remote Host/Join sessions, persistent P1/P2 mappings support two controllers with hotplug, and Remote Client has an Escape menu for local presentation, audio and P2 control settings. The protocol-v4 prototype runs both linked cores on the host, transports full-state Player 2 input over UDP, streams lossless native framebuffers and sends adaptive-jitter-buffered 48 kHz stereo PCM from Player 2. Local, LAN and direct public-IPv4 tests have passed with Tetris and Tetris DX.
 
-Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` is implemented and awaits final physical four-mode regression. Full shader/filter reuse and video pacing/compression follow. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
+Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` is implemented and awaits final physical four-mode regression. Full Remote Client shader/filter reuse is complete; video pacing/compression follows. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
 
 ## Core architectural decisions
 
@@ -250,7 +250,6 @@ Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping on
 ## Next coding tasks
 
 1. Complete physical regression of all four UI/session modes and ordinary single-player.
-2. Route decoded Remote Play frames through the full existing SDL shader/filter presentation path.
-3. Add explicit video pacing and measure queue age, drops and end-to-end latency before selecting another codec.
-4. Authenticate and encrypt protocol-v4 sessions.
-5. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.
+2. Add explicit video pacing and measure queue age, drops and end-to-end latency before selecting another codec.
+3. Authenticate and encrypt protocol-v4 sessions.
+4. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

@@ -264,52 +264,70 @@ static void receive_clock_sync_pong(RemoteClockSync *clock_sync,
     }
 }
 
-static void render_client(SDL_Renderer *renderer,
-                          SDL_Texture *video_texture,
-                          uint16_t buttons)
+static SDL_Rect client_video_destination(SDL_Window *client_window,
+                                         SDL_Renderer *client_renderer,
+                                         unsigned texture_width,
+                                         unsigned texture_height)
 {
-    SDL_SetRenderDrawColor(renderer, 15, 22, 30, 255);
-    SDL_RenderClear(renderer);
+    SDL_Rect video_destination = {0};
+    int output_width = 0;
+    int output_height = 0;
+    if (client_renderer) {
+        SDL_GetRendererOutputSize(client_renderer, &output_width, &output_height);
+    }
+    else {
+        SDL_GL_GetDrawableSize(client_window, &output_width, &output_height);
+    }
+    if (texture_width && texture_height && output_width > 0 && output_height > 0) {
+        if (configuration.scaling_mode == GB_SDL_SCALING_ENTIRE_WINDOW) {
+            video_destination.w = output_width;
+            video_destination.h = output_height;
+        }
+        else {
+            double scale_x = (double)output_width / texture_width;
+            double scale_y = (double)output_height / texture_height;
+            double scale = scale_x < scale_y? scale_x : scale_y;
+            if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR &&
+                scale >= 1.0) {
+                scale = (unsigned)scale;
+            }
+            video_destination.w = (int)(texture_width * scale);
+            video_destination.h = (int)(texture_height * scale);
+        }
+        video_destination.x = (output_width - video_destination.w) / 2;
+        video_destination.y = (output_height - video_destination.h) / 2;
+    }
+    return video_destination;
+}
 
+static void render_client_sdl(SDL_Window *client_window,
+                              SDL_Renderer *client_renderer,
+                              SDL_Texture *video_texture,
+                              uint16_t buttons)
+{
+    SDL_SetRenderDrawColor(client_renderer, 15, 22, 30, 255);
+    SDL_RenderClear(client_renderer);
+
+    int texture_width = 0;
+    int texture_height = 0;
     SDL_Rect video_destination = {0};
     if (video_texture) {
-        int texture_width = 0;
-        int texture_height = 0;
-        int output_width = 0;
-        int output_height = 0;
         SDL_QueryTexture(video_texture,
                          NULL,
                          NULL,
                          &texture_width,
                          &texture_height);
-        SDL_GetRendererOutputSize(renderer, &output_width, &output_height);
-        if (texture_width > 0 && texture_height > 0 &&
-            output_width > 0 && output_height > 0) {
-            if (configuration.scaling_mode == GB_SDL_SCALING_ENTIRE_WINDOW) {
-                video_destination.w = output_width;
-                video_destination.h = output_height;
-            }
-            else {
-                double scale_x = (double)output_width / texture_width;
-                double scale_y = (double)output_height / texture_height;
-                double scale = scale_x < scale_y? scale_x : scale_y;
-                if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR &&
-                    scale >= 1.0) {
-                    scale = (unsigned)scale;
-                }
-                video_destination.w = (int)(texture_width * scale);
-                video_destination.h = (int)(texture_height * scale);
-            }
-            video_destination.x = (output_width - video_destination.w) / 2;
-            video_destination.y = (output_height - video_destination.h) / 2;
-            SDL_SetTextureScaleMode(video_texture,
-                                    configuration.remote_client_filter?
-                                        SDL_ScaleModeLinear : SDL_ScaleModeNearest);
-            SDL_RenderCopy(renderer, video_texture, NULL, &video_destination);
-        }
+        video_destination = client_video_destination(client_window,
+                                                       client_renderer,
+                                                       (unsigned)texture_width,
+                                                       (unsigned)texture_height);
+        SDL_SetTextureScaleMode(video_texture,
+                                configuration.remote_client_filter?
+                                    SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+        SDL_RenderCopy(client_renderer, video_texture, NULL, &video_destination);
     }
 
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawBlendMode(client_renderer, SDL_BLENDMODE_BLEND);
     SDL_Rect indicator = {
         video_texture? video_destination.x + 6 : 6,
         video_texture? video_destination.y + 6 : 6,
@@ -318,15 +336,80 @@ static void render_client(SDL_Renderer *renderer,
     };
     for (unsigned bit = 0; bit < 8; bit++) {
         if (buttons & (1u << bit)) {
-            SDL_SetRenderDrawColor(renderer, 65, 210, 130, 230);
+            SDL_SetRenderDrawColor(client_renderer, 65, 210, 130, 230);
         }
         else {
-            SDL_SetRenderDrawColor(renderer, 25, 35, 45, 180);
+            SDL_SetRenderDrawColor(client_renderer, 25, 35, 45, 180);
         }
         indicator.x = (video_texture? video_destination.x : 0) + 6 + bit * 11;
-        SDL_RenderFillRect(renderer, &indicator);
+        SDL_RenderFillRect(client_renderer, &indicator);
     }
-    SDL_RenderPresent(renderer);
+    SDL_RenderPresent(client_renderer);
+}
+
+static void render_client_gl(SDL_Window *client_window,
+                             bool video_available,
+                             void *new_pixels,
+                             unsigned texture_width,
+                             unsigned texture_height,
+                             uint16_t buttons,
+                             uint64_t *upload_begin_time,
+                             uint64_t *upload_end_time,
+                             uint64_t *present_begin_time,
+                             uint64_t *present_end_time)
+{
+    SDL_Rect video_destination = client_video_destination(client_window,
+                                                           NULL,
+                                                           texture_width,
+                                                           texture_height);
+    if (new_pixels) {
+        *upload_begin_time = monotonic_time_us();
+        upload_bitmap_to_shader(&shader,
+                                new_pixels,
+                                NULL,
+                                texture_width,
+                                texture_height,
+                                GB_FRAME_BLENDING_MODE_DISABLED);
+        *upload_end_time = monotonic_time_us();
+    }
+
+    *present_begin_time = monotonic_time_us();
+    int output_width = 0;
+    int output_height = 0;
+    SDL_GL_GetDrawableSize(client_window, &output_width, &output_height);
+    glViewport(0, 0, output_width, output_height);
+    glClearColor(15.0f / 255.0f, 22.0f / 255.0f, 30.0f / 255.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    if (video_available) {
+        glViewport(video_destination.x,
+                   video_destination.y,
+                   video_destination.w,
+                   video_destination.h);
+        render_uploaded_bitmap_with_shader(&shader,
+                                           video_destination.x,
+                                           video_destination.y,
+                                           video_destination.w,
+                                           video_destination.h);
+    }
+
+    glEnable(GL_SCISSOR_TEST);
+    for (unsigned bit = 0; bit < 8; bit++) {
+        if (buttons & (1u << bit)) {
+            glClearColor(65.0f / 255.0f, 210.0f / 255.0f, 130.0f / 255.0f, 1.0f);
+        }
+        else {
+            glClearColor(25.0f / 255.0f, 35.0f / 255.0f, 45.0f / 255.0f, 1.0f);
+        }
+        int x = (video_available? video_destination.x : 0) + 6 + (int)bit * 11;
+        int y = (video_available? video_destination.y : 0) + 6;
+        glScissor(x, output_height - y - 8, 8, 8);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, output_width, output_height);
+    SDL_GL_SwapWindow(client_window);
+    *present_end_time = monotonic_time_us();
 }
 
 static RemoteFrameTelemetry frame_telemetry_from_chunk(const RemotePlayVideoChunk *chunk,
@@ -1123,7 +1206,7 @@ static int remote_client_network_thread(void *userdata)
     return 0;
 }
 
-int remote_play_client_run(const char *endpoint, uint32_t session_id)
+int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disable_gl)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0) {
         fprintf(stderr, "Could not initialize SDL remote input client: %s\n", SDL_GetError());
@@ -1144,20 +1227,71 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     snprintf(title, sizeof(title),
              "SameBoy Link Remote P2 - %s - Configured P2 controls",
              endpoint);
+    if (!disable_gl) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    }
+    uint32_t window_flags = SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+    if (!disable_gl) window_flags |= SDL_WINDOW_OPENGL;
     SDL_Window *client_window = SDL_CreateWindow(title,
                                                   SDL_WINDOWPOS_CENTERED,
                                                   SDL_WINDOWPOS_CENTERED,
                                                   480,
                                                   432,
-                                                  SDL_WINDOW_ALLOW_HIGHDPI |
-                                                  SDL_WINDOW_RESIZABLE);
+                                                  window_flags);
     SDL_Renderer *client_renderer = NULL;
-    if (client_window) {
-        client_renderer = SDL_CreateRenderer(client_window, -1, SDL_RENDERER_PRESENTVSYNC);
+    SDL_GLContext client_gl_context = NULL;
+    bool client_shader_initialized = false;
+    if (client_window && !disable_gl) {
+        client_gl_context = SDL_GL_CreateContext(client_window);
+        if (client_gl_context) {
+            GLint major = 0;
+            GLint minor = 0;
+            glGetIntegerv(GL_MAJOR_VERSION, &major);
+            glGetIntegerv(GL_MINOR_VERSION, &minor);
+            if (major * 0x100 + minor < 0x302) {
+                SDL_GL_DeleteContext(client_gl_context);
+                client_gl_context = NULL;
+            }
+        }
+        if (client_gl_context) {
+            client_shader_initialized = init_shader_with_name(&shader,
+                                                               configuration.filter);
+            if (!client_shader_initialized) {
+                client_shader_initialized = init_shader_with_name(&shader,
+                                                                   "NearestNeighbor");
+            }
+            if (!client_shader_initialized) {
+                SDL_GL_DeleteContext(client_gl_context);
+                client_gl_context = NULL;
+            }
+            else {
+                SDL_GL_SetSwapInterval(configuration.vsync_mode);
+            }
+        }
     }
-    if (!client_window || !client_renderer) {
+    if (client_window && !client_gl_context) {
+        if (window_flags & SDL_WINDOW_OPENGL) {
+            SDL_DestroyWindow(client_window);
+            window_flags &= ~SDL_WINDOW_OPENGL;
+            client_window = SDL_CreateWindow(title,
+                                              SDL_WINDOWPOS_CENTERED,
+                                              SDL_WINDOWPOS_CENTERED,
+                                              480,
+                                              432,
+                                              window_flags);
+        }
+        if (client_window) {
+            client_renderer = SDL_CreateRenderer(client_window,
+                                                  -1,
+                                                  SDL_RENDERER_PRESENTVSYNC);
+        }
+    }
+    if (!client_window || (!client_gl_context && !client_renderer)) {
         fprintf(stderr, "Could not create remote input window: %s\n", SDL_GetError());
         if (client_renderer) SDL_DestroyRenderer(client_renderer);
+        if (client_gl_context) SDL_GL_DeleteContext(client_gl_context);
         if (client_window) SDL_DestroyWindow(client_window);
         remote_udp_close(&transport);
         SDL_Quit();
@@ -1165,21 +1299,26 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     }
     window = client_window;
     renderer = client_renderer;
-    texture = SDL_CreateTexture(client_renderer,
-                                SDL_PIXELFORMAT_ABGR8888,
-                                SDL_TEXTUREACCESS_STREAMING,
-                                160,
-                                144);
+    texture = client_renderer?
+        SDL_CreateTexture(client_renderer,
+                          SDL_PIXELFORMAT_ABGR8888,
+                          SDL_TEXTUREACCESS_STREAMING,
+                          160,
+                          144) : NULL;
     pixel_format = SDL_AllocFormat(SDL_PIXELFORMAT_ABGR8888);
-    if (!texture || !pixel_format) {
+    uint8_t *presented_frame = SDL_malloc(REMOTE_PLAY_VIDEO_MAX_FRAME_SIZE);
+    if ((client_renderer && !texture) || !pixel_format || !presented_frame) {
         fprintf(stderr, "Could not create remote client menu resources: %s\n", SDL_GetError());
         if (texture) SDL_DestroyTexture(texture);
         if (pixel_format) SDL_FreeFormat(pixel_format);
+        SDL_free(presented_frame);
+        if (client_shader_initialized) free_shader(&shader);
         texture = NULL;
         pixel_format = NULL;
         renderer = NULL;
         window = NULL;
-        SDL_DestroyRenderer(client_renderer);
+        if (client_renderer) SDL_DestroyRenderer(client_renderer);
+        if (client_gl_context) SDL_GL_DeleteContext(client_gl_context);
         SDL_DestroyWindow(client_window);
         remote_udp_close(&transport);
         SDL_Quit();
@@ -1192,12 +1331,19 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     SDL_Texture *video_texture = NULL;
     unsigned texture_width = 0;
     unsigned texture_height = 0;
+    bool video_available = false;
+    bool reupload_video_frame = false;
 
     fprintf(stderr,
             "[SameBoy Link][frontend] remote_input_client target=%s session=%u protocol=%u\n",
             endpoint,
             session_id,
             REMOTE_PLAY_PROTOCOL_VERSION);
+    fprintf(stderr,
+            "[SameBoy Link][video] remote_client_presentation=%s filter=%s\n",
+            client_gl_context? "OpenGL" : "SDL",
+            client_gl_context? configuration.filter :
+                (configuration.remote_client_filter? "Bilinear" : "NearestNeighbor"));
 
     bool running = true;
     bool disconnected_to_frontend = false;
@@ -1210,7 +1356,28 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     RemoteClockSync clock_sync = {0};
     RemoteLatencyStats latency = {0};
     open_audio_device(&audio, 48000);
-    render_client(client_renderer, video_texture, buttons);
+    if (client_gl_context) {
+        uint64_t initial_upload_begin = 0;
+        uint64_t initial_upload_end = 0;
+        uint64_t initial_present_begin = 0;
+        uint64_t initial_present_end = 0;
+        render_client_gl(client_window,
+                         false,
+                         NULL,
+                         160,
+                         144,
+                         buttons,
+                         &initial_upload_begin,
+                         &initial_upload_end,
+                         &initial_present_begin,
+                         &initial_present_end);
+    }
+    else {
+        render_client_sdl(client_window,
+                          client_renderer,
+                          video_texture,
+                          buttons);
+    }
 
     SDL_mutex *network_mutex = SDL_CreateMutex();
     RemoteClientNetworkThread network = {
@@ -1239,13 +1406,16 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
         if (audio.decoder) opus_decoder_destroy(audio.decoder);
 #endif
         SDL_free(audio.ring_samples);
-        SDL_DestroyTexture(texture);
+        SDL_free(presented_frame);
+        if (texture) SDL_DestroyTexture(texture);
         SDL_FreeFormat(pixel_format);
+        if (client_shader_initialized) free_shader(&shader);
         texture = NULL;
         pixel_format = NULL;
         renderer = NULL;
         window = NULL;
-        SDL_DestroyRenderer(client_renderer);
+        if (client_renderer) SDL_DestroyRenderer(client_renderer);
+        if (client_gl_context) SDL_GL_DeleteContext(client_gl_context);
         SDL_DestroyWindow(client_window);
         remote_udp_close(&transport);
         SDL_Quit();
@@ -1270,9 +1440,16 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
                     network.input_changed = true;
                     SDL_UnlockMutex(network_mutex);
                 }
-                SDL_RenderSetViewport(client_renderer, NULL);
+                if (client_renderer) {
+                    SDL_RenderSetViewport(client_renderer, NULL);
+                }
+                else {
+                    update_viewport();
+                }
                 enum pending_command menu_command = run_remote_client_gui();
-                SDL_RenderSetViewport(client_renderer, NULL);
+                if (client_renderer) {
+                    SDL_RenderSetViewport(client_renderer, NULL);
+                }
                 SDL_ShowCursor(SDL_DISABLE);
                 if (menu_command == GB_SDL_DISCONNECT_LINK_COMMAND) {
                     disconnected_to_frontend = true;
@@ -1282,6 +1459,9 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
                 if (menu_command == GB_SDL_QUIT_COMMAND) {
                     running = false;
                     break;
+                }
+                if (client_gl_context && video_available) {
+                    reupload_video_frame = true;
                 }
                 render_needed = true;
                 continue;
@@ -1411,46 +1591,74 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
         uint64_t upload_end_time = 0;
         SDL_LockMutex(network_mutex);
         if (video.frame_ready) {
-            if (!video_texture ||
-                texture_width != video.completed_width ||
+            bool first_video_frame = !video_available;
+            if (texture_width != video.completed_width ||
                 texture_height != video.completed_height) {
-                bool first_video_texture = video_texture == NULL;
-                if (video_texture) {
-                    SDL_DestroyTexture(video_texture);
+                if (client_renderer) {
+                    if (video_texture) {
+                        SDL_DestroyTexture(video_texture);
+                    }
+                    video_texture = SDL_CreateTexture(client_renderer,
+                                                      SDL_PIXELFORMAT_ABGR8888,
+                                                      SDL_TEXTUREACCESS_STREAMING,
+                                                      video.completed_width,
+                                                      video.completed_height);
                 }
-                video_texture = SDL_CreateTexture(client_renderer,
-                                                  SDL_PIXELFORMAT_ABGR8888,
-                                                  SDL_TEXTUREACCESS_STREAMING,
-                                                  video.completed_width,
-                                                  video.completed_height);
                 texture_width = video.completed_width;
                 texture_height = video.completed_height;
                 SDL_SetWindowMinimumSize(client_window,
                                          video.completed_width,
                                          video.completed_height);
-                if (first_video_texture) {
+                if (first_video_frame) {
                     SDL_SetWindowSize(client_window,
                                       video.completed_width * 3,
                                       video.completed_height * 3);
                 }
             }
-            upload_begin_time = monotonic_time_us();
-            SDL_UpdateTexture(video_texture,
-                              NULL,
-                              video.frame_buffers[video.completed_buffer],
-                              video.completed_width * 4);
-            upload_end_time = monotonic_time_us();
+            memcpy(presented_frame,
+                   video.frame_buffers[video.completed_buffer],
+                   (size_t)video.completed_width * video.completed_height * 4);
             frame_telemetry = video.completed_telemetry;
             frame_clock_sync = clock_sync;
             presenting_new_frame = true;
+            video_available = true;
             video.frame_ready = false;
             render_needed = true;
         }
         SDL_UnlockMutex(network_mutex);
         if (render_needed) {
-            uint64_t present_begin_time = monotonic_time_us();
-            render_client(client_renderer, video_texture, buttons);
-            uint64_t present_end_time = monotonic_time_us();
+            uint64_t present_begin_time = 0;
+            uint64_t present_end_time = 0;
+            if (client_gl_context) {
+                render_client_gl(client_window,
+                                 video_available,
+                                 (presenting_new_frame || reupload_video_frame)?
+                                     presented_frame : NULL,
+                                 texture_width? texture_width : 160,
+                                 texture_height? texture_height : 144,
+                                 buttons,
+                                 &upload_begin_time,
+                                 &upload_end_time,
+                                 &present_begin_time,
+                                 &present_end_time);
+                reupload_video_frame = false;
+            }
+            else {
+                if (presenting_new_frame && video_texture) {
+                    upload_begin_time = monotonic_time_us();
+                    SDL_UpdateTexture(video_texture,
+                                      NULL,
+                                      presented_frame,
+                                      texture_width * 4);
+                    upload_end_time = monotonic_time_us();
+                }
+                present_begin_time = monotonic_time_us();
+                render_client_sdl(client_window,
+                                  client_renderer,
+                                  video_texture,
+                                  buttons);
+                present_end_time = monotonic_time_us();
+            }
             if (presenting_new_frame) {
                 record_presented_frame_latency(&latency,
                                                &frame_clock_sync,
@@ -1534,17 +1742,28 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id)
     }
 #endif
     SDL_free(audio.ring_samples);
+    SDL_free(presented_frame);
     if (video_texture) {
         SDL_DestroyTexture(video_texture);
     }
-    SDL_DestroyTexture(texture);
+    if (texture) {
+        SDL_DestroyTexture(texture);
+    }
     SDL_FreeFormat(pixel_format);
+    if (client_shader_initialized) {
+        free_shader(&shader);
+    }
     texture = NULL;
     pixel_format = NULL;
     renderer = NULL;
     window = NULL;
     SDL_DestroyMutex(network_mutex);
-    SDL_DestroyRenderer(client_renderer);
+    if (client_renderer) {
+        SDL_DestroyRenderer(client_renderer);
+    }
+    if (client_gl_context) {
+        SDL_GL_DeleteContext(client_gl_context);
+    }
     SDL_DestroyWindow(client_window);
     remote_udp_close(&transport);
     if (!disconnected_to_frontend) {

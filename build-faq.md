@@ -162,7 +162,10 @@ and use the same keyboard layout as P1: arrow keys, X, Z, Enter and Backspace.
 The dedicated Local Link P2 layout (W/A/S/D, K, J, I and U) remains available
 as an alternative. Local Link on one keyboard still keeps the two layouts
 separate. The remote window is freely resizable and preserves the native screen
-aspect ratio with centered letterboxing or pillarboxing.
+aspect ratio with centered letterboxing or pillarboxing. Under OpenGL, Escape
+opens Video Options where Scaling Filter cycles through the same shader/filter
+set as ordinary SameBoy. `--nogl` forces the nearest/bilinear SDL renderer
+fallback for compatibility and regression testing.
 
 This direct-IP mode is development-only and currently has no authentication or
 encryption, so it should only be used on a trusted LAN. The client now displays

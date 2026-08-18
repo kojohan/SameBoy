@@ -47,6 +47,9 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Add a Remote Client Escape menu with persistent local video/audio/P2-control settings.
 - [x] Return Remote Client to the ordinary idle frontend after Disconnect.
 - [ ] Regression-test all four modes plus ordinary single-player.
+  - [x] One-PC regression: headless single-player, SDL single-player, menu-driven
+    Local Link, menu-driven Remote Host/Join loopback and clean Disconnect.
+  - [ ] Repeat the menu-driven Remote Host/Join flow on two physical PCs.
 
 ## LAN Remote Play
 
@@ -60,7 +63,7 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Implement client framebuffer reconstruction.
 - [x] Make the remote P2 window freely resizable without stretching its aspect ratio.
 - [x] Add a runtime host-view toggle between P1-only and side-by-side presentation.
-- [ ] Reuse SameBoy/SDL rendering path for client-side nearest-neighbour/integer scaling.
+- [x] Reuse SameBoy's OpenGL shader/filter path for client-side presentation, with an SDL renderer fallback.
 - [x] Add remote P2 audio path.
 - [x] Add bounded video/audio queues.
 - [x] Drop obsolete video instead of accumulating latency.

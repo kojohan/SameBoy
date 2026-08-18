@@ -6,7 +6,7 @@ A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy
 
 The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v4 provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread and latency telemetry. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
 
-PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` is implemented and awaits final physical four-mode regression. Full client shader/filter reuse and video pacing are next, before authenticated/encrypted sessions and zero-configuration Internet connectivity.
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` is implemented and awaits final physical four-mode regression. Full client shader/filter reuse is complete; video pacing is next, before authenticated/encrypted sessions and zero-configuration Internet connectivity.
 
 ## Product direction
 
@@ -372,7 +372,6 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 ## Next implementation tasks
 
 1. Complete physical regression of single-player, Local Link, Remote Host and Remote Client UI flows.
-2. Reuse SameBoy's full shader/filter pipeline in the Remote Play client.
-3. Improve video pacing and evaluate low-latency compression without regressing the lossless reference path.
-4. Add session authentication and encryption before treating direct Internet play as a public feature.
-5. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.
+2. Improve video pacing and evaluate low-latency compression without regressing the lossless reference path.
+3. Add session authentication and encryption before treating direct Internet play as a public feature.
+4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

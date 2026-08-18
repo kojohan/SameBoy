@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls and the Remote Client menu are integrated into the normal SDL frontend. Remote Play is playable over LAN and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Remote Play is playable over LAN and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -95,10 +95,11 @@ Start here depending on what you want to know:
 The completed foundation now includes the reproducible Windows build, dual-core
 Local Link, explicit session modes, persistent independent controls, menu-driven
 Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
-settings-capable Remote Client. The immediate development order is now:
+settings-capable Remote Client with local SameBoy shaders/filters. The immediate
+development order is now:
 
 1. physically regression-test the completed four-mode UI/session flow on both PCs;
-2. reuse the full SameBoy shader/filter presentation path in Remote Client and improve Internet video pacing;
+2. improve Internet video pacing and measure queue age and presentation latency;
 3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback;
 4. optimize latency based on further physical Internet measurements.
 

@@ -129,7 +129,7 @@ Deliverables:
 
 **Exit criterion:** all four roles are selectable in the same executable, normal single-player behavior remains intact, and Disconnect releases link/network/input state cleanly.
 
-See `LINK_UI_ARCHITECTURE.md` for the design contract. Automated build, loopback, menu and Disconnect checks pass. Final physical Host/Join verification, full client shader reuse, visual polish, packaging and compatibility work remain.
+See `LINK_UI_ARCHITECTURE.md` for the design contract. Automated build, loopback, menu, Disconnect and full client shader/filter checks pass. Final physical Host/Join verification, visual polish, packaging and compatibility work remain.
 
 ---
 

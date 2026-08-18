@@ -445,9 +445,9 @@ same executable remains responsible for single-player, Local Link, Remote Host
 and Remote Client roles, and the existing CLI entry points remain regression
 paths while the menu flows are introduced.
 
-This reprioritizes essential UI/session integration ahead of further Internet
-coordination. Client shader/filter reuse, video pacing, authentication,
-encryption, NAT traversal and relay support remain subsequent milestones.
+At that checkpoint, this reprioritized essential UI/session integration ahead
+of client shader/filter reuse, video pacing, authentication, encryption, NAT
+traversal and relay support.
 
 ### First Link-menu slice
 
@@ -485,8 +485,8 @@ implementation.
 
 Remote Client now participates in the frontend menu lifecycle. Escape opens a
 client-specific SameBoy menu instead of terminating the process. The client can
-resume, disconnect, quit, change aspect/integer/stretch scaling, select nearest
-or bilinear filtering, resize or toggle fullscreen, change volume/mute, remap
+resume, disconnect, quit, change aspect/integer/stretch scaling, select the full
+SameBoy shader/filter set, resize or toggle fullscreen, change volume/mute, remap
 the P2 keyboard and select/configure the P2 controller. These settings persist
 on the client machine. Disconnect tears down its UDP/audio/video resources and
 returns to the ordinary SameBoy start window without launching another process.
@@ -498,3 +498,57 @@ Escape leaves the stream process alive and that Disconnect stops the network
 thread and returns that process to the `SameBoy v1.0.3` start window. Physical
 verification of the new menu-driven Host/Join path remains before the four-mode
 GUI/session milestone is signed off.
+
+### One-PC four-mode regression
+
+The completed menu/session implementation was regression-tested on a fresh
+Windows development setup. The headless tester ran both the `RIBBIT` CGB demo
+and the purpose-built `COOP LINK` CGB test ROM for 15 emulated seconds and
+produced valid 160x144 framebuffer captures. The real SDL frontend then passed
+ordinary single-player and Local Link startup with OpenGL presentation, XAudio2
+at 48 kHz and measured cadence near the nominal 59.727501 Hz.
+
+The menu-driven Local Link flow displayed both cores, accepted the independent
+P1/P2 keyboard mappings, opened the menu at the full 320x144 presentation size
+and returned to single-player through `Link > Disconnect`. Its shutdown log
+recorded 56 P1 and 8,680 P2 serial bits and an explicit
+`local_link -> single_player` transition.
+
+The menu-driven Remote Host/Join flow was also exercised through a one-PC UDP
+loopback session. The host accepted 749 input packets with no rejected or stale
+packets, sent 1,769 lossless video frames with no host-side drops, sent 5,917
+PCM audio packets with no host-side drops and answered all 74 clock-sync pings.
+The user confirmed working P2 video, audio, input, the Remote Client Escape menu
+and clean Disconnect behavior. The host recorded 12,296 P1 and 56 P2 serial
+bits during teardown.
+
+This completes the local regression coverage but does not close the milestone:
+the same menu-driven Host/Join flow still needs to be repeated on two physical
+PCs when the second machine is available.
+
+### Full Remote Client shader/filter reuse
+
+Decoded native P2 frames now use the same OpenGL shader/filter implementation
+as ordinary SameBoy. Upload and presentation are separate operations so network
+decode/upload and buffer-swap latency remain independently measurable. The
+client Video Options menu cycles the complete configured SameBoy filter list;
+changing filters recreates the shader and reuploads the latest completed frame.
+If OpenGL 3.2 or shader initialization is unavailable, the client recreates its
+window with the established nearest/bilinear SDL renderer. `--nogl` explicitly
+selects that fallback for compatibility testing.
+
+A clean Windows debug build passed with `-Werror`. The user manually verified
+the OpenGL loopback image, audio, LCD/CRT/Nearest filter switching, resizing,
+P2 input and clean Disconnect. Across 8,361 decoded frames the client reported
+zero video drops or rejections; the host sent 8,391 frames and 28,086 PCM audio
+packets with zero send drops. Average measured input-to-present latency was
+30.309 ms and maximum latency was 48.620 ms. Four audio underflows occurred
+during the long menu/filter test alongside a 534.960 ms maximum arrival gap;
+there were no audio drops, stale packets, trims or decode errors.
+
+The explicit `--nogl` loopback selected `remote_client_presentation=SDL` and
+received at least 480 video frames without drops or rejections plus more than
+1,800 PCM packets without drops, stale packets or underflows. Post-change smoke
+tests also kept ordinary single-player and Local Link running without logged
+errors. The remaining four-mode milestone item is still the two-physical-PC
+Host/Join test.

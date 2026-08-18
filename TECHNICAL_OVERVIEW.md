@@ -4,7 +4,7 @@ This document is the high-level technical introduction for contributors. For the
 
 ## Current snapshot — 2026-08-18
 
-The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v4 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN and direct public-IPv4 play have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. Remote Client has a dedicated network thread, latency telemetry, aspect-correct resizing and an Escape menu for local video/audio/P2-control settings. Full SameBoy shader reuse, video pacing/compression, authentication, encryption and production-grade Internet connectivity remain planned work.
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v4 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN and direct public-IPv4 play have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. Remote Client has a dedicated network thread, latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Video pacing/compression, authentication, encryption and production-grade Internet connectivity remain planned work.
 
 ## 1. Why SameBoy
 

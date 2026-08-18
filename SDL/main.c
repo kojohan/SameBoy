@@ -80,7 +80,7 @@ static void set_session_clock_multiplier(double multiplier)
 
 bool uses_gl(void)
 {
-    return gl_context;
+    return SDL_GL_GetCurrentContext() != NULL;
 }
 
 void rerender_screen(void)
@@ -2243,7 +2243,8 @@ int main(int argc, char **argv)
 
     if (remote_client_endpoint) {
         int client_result = remote_play_client_run(remote_client_endpoint,
-                                                   remote_session_id);
+                                                   remote_session_id,
+                                                   nogl);
         if (client_result != REMOTE_PLAY_CLIENT_DISCONNECTED) {
             return client_result;
         }

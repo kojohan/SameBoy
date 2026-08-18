@@ -62,10 +62,9 @@ static GLuint create_program(const char *vsh, const char *fsh)
     return program;
 }
 
-extern bool uses_gl(void);
 bool init_shader_with_name(shader_t *shader, const char *name)
 {
-    if (!uses_gl()) return false;
+    if (!SDL_GL_GetCurrentContext()) return false;
     
     GLint major = 0, minor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &major);
@@ -165,14 +164,11 @@ bool init_shader_with_name(shader_t *shader, const char *name)
     return true;
 }
 
-void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous,
-                               unsigned source_width, unsigned source_height,
-                               unsigned x, unsigned y, unsigned w, unsigned h,
-                               GB_frame_blending_mode_t blending_mode)
+void upload_bitmap_to_shader(shader_t *shader, void *bitmap, void *previous,
+                             unsigned source_width, unsigned source_height,
+                             GB_frame_blending_mode_t blending_mode)
 {
     glUseProgram(shader->program);
-    glUniform2f(shader->origin_uniform, x, y);
-    glUniform2f(shader->resolution_uniform, w, h);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shader->texture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_width, source_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap);
@@ -184,13 +180,36 @@ void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous,
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, source_width, source_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, previous);
         glUniform1i(shader->previous_texture_uniform, 1);
     }
+}
+
+void render_uploaded_bitmap_with_shader(shader_t *shader,
+                                        unsigned x, unsigned y,
+                                        unsigned w, unsigned h)
+{
+    glUseProgram(shader->program);
+    glUniform2f(shader->origin_uniform, x, y);
+    glUniform2f(shader->resolution_uniform, w, h);
     glBindFragDataLocation(shader->program, 0, "frag_color");
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
+void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous,
+                               unsigned source_width, unsigned source_height,
+                               unsigned x, unsigned y, unsigned w, unsigned h,
+                               GB_frame_blending_mode_t blending_mode)
+{
+    upload_bitmap_to_shader(shader,
+                            bitmap,
+                            previous,
+                            source_width,
+                            source_height,
+                            blending_mode);
+    render_uploaded_bitmap_with_shader(shader, x, y, w, h);
+}
+
 void free_shader(shader_t *shader)
 {
-    if (!uses_gl()) return;
+    if (!SDL_GL_GetCurrentContext()) return;
     GLint major = 0, minor = 0;
     glGetIntegerv(GL_MAJOR_VERSION, &major);
     glGetIntegerv(GL_MINOR_VERSION, &minor);

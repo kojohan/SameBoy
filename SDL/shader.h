@@ -25,6 +25,12 @@ typedef enum {
 } GB_frame_blending_mode_t;
 
 bool init_shader_with_name(shader_t *shader, const char *name);
+void upload_bitmap_to_shader(shader_t *shader, void *bitmap, void *previous,
+                             unsigned source_width, unsigned source_height,
+                             GB_frame_blending_mode_t blending_mode);
+void render_uploaded_bitmap_with_shader(shader_t *shader,
+                                        unsigned x, unsigned y,
+                                        unsigned w, unsigned h);
 void render_bitmap_with_shader(shader_t *shader, void *bitmap, void *previous,
                                unsigned source_width, unsigned source_height,
                                unsigned x, unsigned y, unsigned w, unsigned h,
