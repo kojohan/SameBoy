@@ -80,7 +80,9 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Record machine role, active nonzero-speed network medium/link speed and test label in log metadata.
 - [x] Add bounded p50/p95/p99/max and ten-second-window telemetry for audio packet arrival.
 - [x] Physically verify schema-v3 audio windows and active-adapter metadata on Wi-Fi/Wi-Fi.
-- [ ] Add comparable fixed-window telemetry for RTT/jitter, video network time, queue age and total latency.
+- [x] Add comparable ten-second-window telemetry for RTT/jitter, video network time and total latency.
+- [x] Complete an extended 7.5-minute Wi-Fi/Wi-Fi schema-v4 baseline.
+- [ ] Add sender queue-age windows only if a sender queue is implemented; no such queue exists in the accepted baseline.
 - [x] Count frames actually presented separately from completed and superseded frames.
 - [ ] Run three five-minute repetitions for both-Ethernet and fixed-role Ethernet/Wi-Fi baselines.
 - [ ] Add a bounded priority sender scheduler: input/clock, then audio, then video.

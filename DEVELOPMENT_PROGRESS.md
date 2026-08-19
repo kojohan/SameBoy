@@ -799,3 +799,40 @@ latency and a 0.729 ms maximum host video burst. The user heard no audio fault.
 Because increasing the minimum PCM target would add latency without an observed
 benefit, the existing PCM parameters remain unchanged and deeper pacing work is
 again deferred until a repeatable audible or visible failure appears.
+
+### Schema-v4 timing windows
+
+Clock-sync checkpoints and detailed input-to-present records now include client
+elapsed milliseconds. The paired-log summarizer groups smoothed RTT/jitter and
+input-to-present/video-network samples into comparable ten-second windows while
+retaining whole-session percentiles. Reports advance to schema version 4 and
+continue to process schema-v3 and older logs without timestamped timing windows.
+
+No sender queue was introduced: queue-age telemetry is explicitly deferred
+until such a queue exists, avoiding instrumentation for nonexistent state. The
+automated Remote Play regression now requires timestamped clock telemetry; the
+next physical five-minute run was designated to supply input-change samples for
+the first full schema-v4 windowed report.
+
+The warnings-as-errors Windows build and all four automated smoke modes passed.
+The automated OpenGL run produced a schema-v4 clock window, a synthetic
+three-sample fixture verified latency grouping across the 0-10 and 10-20 second
+boundaries, and the latest physical schema-v3 log remained compatible with
+empty timing-window arrays. The verified dirty development runtime was
+published to the NAS as `timing-windows-v4` for the five-minute physical run.
+
+The physical schema-v4 Wi-Fi/Wi-Fi run then exceeded the requested duration at
+approximately 453.6 active seconds. It produced 46 clock windows and seven
+input-active latency windows. RTT averaged 15.340 ms with 18.490 ms p95;
+input-to-present latency averaged 37.890 ms with 51.476 ms p95 and 61.886 ms
+maximum. Video-network time averaged 4.578 ms, zero frames were lost and 0.61%
+of completed frames were superseded before presentation. Presentation calls
+remained below 0.973 ms.
+
+Audio had zero missing/stale packets, decode errors or trims. Three technical
+underflows occurred as the adaptive target decayed and recovered, but the user
+judged audio acceptable for now and did not listen continuously throughout the
+run. The result therefore closes physical schema-v4 verification without
+claiming that every callback was perceptually inspected. No PCM, video or queue
+behavior is changed; future tuning requires a repeatable audible or visible
+fault.

@@ -251,18 +251,63 @@ function Get-RecordSeries {
 function Get-FieldStatistics {
     param(
         [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Records,
-        [Parameter(Mandatory)][string]$Field
+        [Parameter(Mandatory)][string]$Field,
+        [switch]$NonNegative
     )
 
     [double[]]$values = @(
         foreach ($record in $Records) {
             $property = $record.PSObject.Properties[$Field]
             if ($null -ne $property -and $property.Value -is [ValueType]) {
-                [double]$property.Value
+                $value = [double]$property.Value
+                if (-not $NonNegative -or $value -ge 0) {
+                    $value
+                }
             }
         }
     )
     return Get-Statistics -Values $values
+}
+
+function Get-StatisticWindows {
+    param(
+        [Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Records,
+        [Parameter(Mandatory)][string[]]$Fields,
+        [int]$WindowSeconds = 10,
+        [switch]$NonNegative
+    )
+
+    $recordGroups = @{}
+    foreach ($record in $Records) {
+        $timeProperty = $record.PSObject.Properties["t_ms"]
+        if ($null -eq $timeProperty -or $timeProperty.Value -isnot [ValueType]) {
+            continue
+        }
+        $timeMs = [long]$timeProperty.Value
+        $windowStart = [long]([Math]::Floor($timeMs / ($WindowSeconds * 1000.0)) * $WindowSeconds)
+        if (-not $recordGroups.ContainsKey($windowStart)) {
+            $recordGroups[$windowStart] = [System.Collections.Generic.List[object]]::new()
+        }
+        $recordGroups[$windowStart].Add($record)
+    }
+
+    $windows = @()
+    foreach ($windowStart in @($recordGroups.Keys | Sort-Object { [long]$_ })) {
+        $windowRecords = @($recordGroups[$windowStart])
+        $statistics = [ordered]@{}
+        foreach ($field in $Fields) {
+            $statistics[$field] = Get-FieldStatistics -Records $windowRecords `
+                                                        -Field $field `
+                                                        -NonNegative:$NonNegative
+        }
+        $windows += [pscustomobject][ordered]@{
+            startSeconds = [long]$windowStart
+            endSeconds = [long]$windowStart + $WindowSeconds
+            samples = $windowRecords.Count
+            statistics = $statistics
+        }
+    }
+    return @($windows)
 }
 
 function Get-TimedEventWindows {
@@ -383,7 +428,9 @@ $latencyFields = @(
 )
 $latencyStatistics = [ordered]@{}
 foreach ($field in $latencyFields) {
-    $latencyStatistics[$field] = Get-FieldStatistics -Records $latencyRecords -Field $field
+    $latencyStatistics[$field] = Get-FieldStatistics -Records $latencyRecords `
+                                                    -Field $field `
+                                                    -NonNegative
 }
 $clockStatistics = [ordered]@{
     note = "Statistics use logged smoothed checkpoints, not every clock sample."
@@ -391,6 +438,12 @@ $clockStatistics = [ordered]@{
     jitter_ms = Get-FieldStatistics -Records $clockRecords -Field "jitter_ms"
     uncertainty_ms = Get-FieldStatistics -Records $clockRecords -Field "uncertainty_ms"
 }
+$latencyWindows = @(Get-StatisticWindows -Records $latencyRecords `
+                                         -Fields @("total_ms", "video_network_ms") `
+                                         -NonNegative)
+$clockWindows = @(Get-StatisticWindows -Records $clockRecords `
+                                       -Fields @("rtt_ms", "jitter_ms"))
+$timingWindowsMeasured = $latencyWindows.Count -gt 0 -or $clockWindows.Count -gt 0
 $audioArrivalSamplesValue = Get-RecordValue -Record $clientFinal `
                                               -Name "audio_arrival_samples" `
                                               -Default $null
@@ -466,6 +519,10 @@ if ([double]$totalLatencyMaximum -gt 100) {
 if ($latencyRecords.Count -eq 0) {
     $observations.Add("No detailed remote_latency samples were available.")
 }
+if (($latencyRecords.Count -gt 0 -or $clockRecords.Count -gt 0) -and
+    -not $timingWindowsMeasured) {
+    $observations.Add("Ten-second RTT/jitter/latency windows are unavailable in this older log because timing records have no t_ms field.")
+}
 if (-not $audioArrivalMeasured) {
     $observations.Add("Audio inter-arrival percentiles are unavailable in this older log; only the session maximum is recorded.")
 }
@@ -487,7 +544,7 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
 
 $summary = [ordered]@{
-    schemaVersion = 3
+    schemaVersion = 4
     generatedAtUtc = [DateTime]::UtcNow.ToString("o")
     testLabel = $TestLabel
     inputs = [ordered]@{
@@ -557,6 +614,15 @@ $summary = [ordered]@{
     }
     latencyStatistics = $latencyStatistics
     loggedClockCheckpointStatistics = $clockStatistics
+    timingWindows = [ordered]@{
+        measured = $timingWindowsMeasured
+        clockMeasured = $clockWindows.Count -gt 0
+        latencyMeasured = $latencyWindows.Count -gt 0
+        durationSeconds = 10
+        note = "Clock windows use logged smoothed checkpoints; latency windows use input-change samples. Sender queue age is deferred because no sender queue exists."
+        clockCheckpoints = @($clockWindows)
+        latency = @($latencyWindows)
+    }
     audioArrivalStatistics = $audioArrivalStatistics
     audioArrivalWindows = @($audioArrivalWindows)
     timedEventWindows = @(Get-TimedEventWindows -Content $clientContent)
@@ -632,6 +698,40 @@ $markdown.Add("| Samples | Average | p50 | p95 | p99 | Maximum |")
 $markdown.Add("|---:|---:|---:|---:|---:|---:|")
 $markdown.Add("| $($totalLatency.samples) | $(Format-Number $totalLatency.average) ms | $(Format-Number $totalLatency.p50) ms | $(Format-Number $totalLatency.p95) ms | $(Format-Number $totalLatency.p99) ms | $(Format-Number $totalLatency.maximum) ms |")
 $markdown.Add("")
+$markdown.Add("## Ten-second timing windows")
+$markdown.Add("")
+$markdown.Add("Clock windows use periodic smoothed checkpoints. Latency windows use samples created when client input changes; queue age remains deferred because there is no sender queue.")
+$markdown.Add("")
+$markdown.Add("### RTT and jitter")
+$markdown.Add("")
+if ($clockWindows.Count -eq 0) {
+    $markdown.Add("No timestamped clock-checkpoint windows were available.")
+}
+else {
+    $markdown.Add("| Window | Samples | RTT average | RTT p95 | RTT max | Jitter average | Jitter p95 | Jitter max |")
+    $markdown.Add("|---:|---:|---:|---:|---:|---:|---:|---:|")
+    foreach ($window in $clockWindows) {
+        $rtt = $window.statistics.rtt_ms
+        $jitter = $window.statistics.jitter_ms
+        $markdown.Add("| $($window.startSeconds)-$($window.endSeconds) s | $($window.samples) | $(Format-Number $rtt.average) ms | $(Format-Number $rtt.p95) ms | $(Format-Number $rtt.maximum) ms | $(Format-Number $jitter.average) ms | $(Format-Number $jitter.p95) ms | $(Format-Number $jitter.maximum) ms |")
+    }
+}
+$markdown.Add("")
+$markdown.Add("### Input-to-present and video network time")
+$markdown.Add("")
+if ($latencyWindows.Count -eq 0) {
+    $markdown.Add("No timestamped input-latency windows were available.")
+}
+else {
+    $markdown.Add("| Window | Samples | Total average | Total p95 | Total max | Video network average | Video network p95 | Video network max |")
+    $markdown.Add("|---:|---:|---:|---:|---:|---:|---:|---:|")
+    foreach ($window in $latencyWindows) {
+        $total = $window.statistics.total_ms
+        $videoNetwork = $window.statistics.video_network_ms
+        $markdown.Add("| $($window.startSeconds)-$($window.endSeconds) s | $($window.samples) | $(Format-Number $total.average) ms | $(Format-Number $total.p95) ms | $(Format-Number $total.maximum) ms | $(Format-Number $videoNetwork.average) ms | $(Format-Number $videoNetwork.p95) ms | $(Format-Number $videoNetwork.maximum) ms |")
+    }
+}
+$markdown.Add("")
 $markdown.Add("## Timed event windows")
 $markdown.Add("")
 if ($summary.timedEventWindows.Count -eq 0) {
@@ -659,5 +759,6 @@ Write-Host "Video dropped/superseded: $([long]$videoDropped) / $([long]$videoSup
 Write-Host "Audio dropped/underflows: $([long]$audioDropped) / $([long]$audioUnderflows)"
 Write-Host "Audio arrival average/p95/p99/max: $(Format-Number $audioArrivalStatistics.average) / $(Format-Number $audioArrivalStatistics.p95) / $(Format-Number $audioArrivalStatistics.p99) / $(Format-Number $audioArrivalStatistics.maximum) ms"
 Write-Host "Latency average/p95/max: $(Format-Number $totalLatency.average) / $(Format-Number $totalLatency.p95) / $(Format-Number $totalLatency.maximum) ms"
+Write-Host "Timing windows clock/latency: $($clockWindows.Count) / $($latencyWindows.Count)"
 Write-Host "JSON: $jsonPath"
 Write-Host "Markdown: $markdownPath"

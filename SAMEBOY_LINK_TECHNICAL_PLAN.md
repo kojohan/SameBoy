@@ -249,7 +249,7 @@ Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping on
 
 ## Next coding tasks
 
-1. Add remaining fixed-window RTT, video-network, queue-age and total-latency telemetry, then complete longer fixed-role baselines.
+1. Complete the remaining fixed-role baselines using the physically verified schema-v4 RTT/jitter/video-network/total-latency windows.
 2. Preserve the current PCM target/hysteresis and protocol-v5 sender unless repeated audible or visible evidence shows a measurable need.
 3. Authenticate and encrypt protocol-v5 sessions.
 4. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

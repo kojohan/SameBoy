@@ -104,7 +104,7 @@ without per-packet logging. A physical Wi-Fi/Wi-Fi verification had no audible
 audio faults, so the current low-latency PCM settings remain unchanged. The next
 work is:
 
-1. complete longer baselines and add remaining RTT/video/queue time-window telemetry;
+1. complete the remaining fixed-role baseline matrix using the physically verified ten-second RTT/jitter/video/total-latency windows;
 2. revisit PCM, priority scheduling or lower-bandwidth video only when repeated audible/visible evidence justifies it;
 3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
 

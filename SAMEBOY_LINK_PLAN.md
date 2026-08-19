@@ -371,7 +371,7 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 
 ## Next implementation tasks
 
-1. Complete the remaining fixed-window telemetry and longer Ethernet/Wi-Fi performance gate.
+1. Complete the remaining fixed-role Ethernet/Wi-Fi performance matrix using the physically verified schema-v4 timing windows.
 2. Preserve the accepted PCM/protocol-v5 baseline unless repeated audible or visible evidence justifies more pacing/buffering work.
 3. Add session authentication and encryption before treating direct Internet play as a public feature.
 4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

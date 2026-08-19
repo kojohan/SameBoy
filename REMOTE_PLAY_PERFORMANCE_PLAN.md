@@ -180,6 +180,33 @@ behavior. The user heard no audio fault during the run. Increasing the minimum
 PCM buffer solely to remove these counters would add latency without an
 observed benefit, so the current parameters remain the accepted baseline.
 
+## Test F — schema-v4 extended Wi-Fi/Wi-Fi baseline
+
+The `timing-windows-v4` build ran for approximately 453.6 active seconds and
+physically verified the new ten-second timing windows. Both machines again
+recorded active 1.2 Gbit/s Wi-Fi interfaces and matching executable hashes.
+
+| Measurement | Result |
+|---|---:|
+| Clock / input-active latency windows | 46 / 7 |
+| RTT average / p95 / maximum | 15.340 / 18.490 / 20.594 ms |
+| Jitter average / maximum | 5.139 / 6.985 ms |
+| Input-to-present average / p95 / maximum | 37.890 / 51.476 / 61.886 ms |
+| Video-network average / p95 / maximum | 4.578 / 12.459 / 18.347 ms |
+| Video dropped / superseded | 0 / 164 (0.61%) |
+| Present-call average / maximum / slow | 0.087 / 0.973 ms / 0 |
+| Audio arrival average / p95 / p99 / maximum | 5.000 / 18 / 20 / 50.983 ms |
+| Audio dropped / stale / decode errors / trims | 0 / 0 / 0 / 0 |
+| Audio underflows | 3 |
+
+The three underflows occurred around 102, 223 and 314 seconds as the adaptive
+target decayed toward 40-50 ms and then recovered upward. They did not coincide
+with packet loss. The user judged the audio acceptable for now, while noting
+that it was not monitored continuously for the entire run. This is sufficient
+for the current practical baseline but not evidence that every callback was
+inaudible. PCM parameters remain unchanged; revisit decay/hysteresis only if a
+future test exposes a repeatable audible fault.
+
 ## Evidence-based conclusions
 
 1. Protocol validation and bounded queues are working: rejected/stale counts
@@ -207,15 +234,15 @@ observed benefit, so the current parameters remain the accepted baseline.
 ### P0 — reproducible performance gate and richer telemetry
 
 1. Extend the implemented `summarize-windows-link-logs.ps1` JSON/Markdown
-   summary as new telemetry is added. Schema v3 handles normalized rates,
-   latency percentiles, audio-arrival percentiles/windows, event windows and the
+   summary as new telemetry is added. Schema v4 handles normalized rates,
+   latency percentiles, audio-arrival and timing windows, event windows and the
    shutdown tail.
 2. Keep the implemented launcher metadata and unique shared-log naming aligned
    with the summarizer. Adapter selection now rejects disconnected, zero-speed
    and addressless interfaces before recording the active default route.
-3. Extend the implemented p50/p95/p99/max audio inter-arrival measurements with
-   comparable fixed-window RTT, jitter, video network time, queue age and total
-   latency data so every burst can be located automatically.
+3. Use the implemented ten-second RTT, jitter, video-network and total-latency
+   windows to locate bursts automatically. Queue-age telemetry remains deferred
+   because the accepted immediate sender has no sender queue to measure.
 4. Count frames actually presented separately from completed, superseded and
    repeated frames. Log host frame cadence and sender queue age.
 5. Establish a baseline matrix with at least three five-minute runs per setup:
@@ -320,7 +347,7 @@ public-facing Internet release.
 
 ## Recommended implementation order
 
-1. Complete longer fixed-role Ethernet/Wi-Fi baseline repetitions and remaining fixed-window telemetry.
+1. Complete the remaining fixed-role Ethernet/Wi-Fi baseline repetitions using the physically verified schema-v4 timing windows.
 2. Revisit PCM, priority scheduling or chunk pacing only if the accepted protocol-v5 baseline shows an audible, visible or repeatable measurable need.
 3. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
 4. Run controlled impairment and longer Internet regressions.

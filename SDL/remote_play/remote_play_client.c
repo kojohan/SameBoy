@@ -355,8 +355,9 @@ static void receive_clock_sync_pong(RemoteClockSync *clock_sync,
     clock_sync->responses++;
     if (clock_sync->responses == 1 || clock_sync->responses % 10 == 0) {
         fprintf(stderr,
-                "[SameBoy Link][timing] remote_clock_sync_client samples=%llu rtt_ms=%.3f jitter_ms=%.3f min_rtt_ms=%.3f offset_us=%lld uncertainty_ms=%.3f\n",
+                "[SameBoy Link][timing] remote_clock_sync_client samples=%llu t_ms=%llu rtt_ms=%.3f jitter_ms=%.3f min_rtt_ms=%.3f offset_us=%lld uncertainty_ms=%.3f\n",
                 (unsigned long long)clock_sync->responses,
+                (unsigned long long)client_elapsed_ms(),
                 clock_sync->smoothed_rtt_us / 1000.0,
                 clock_sync->jitter_us / 1000.0,
                 clock_sync->min_rtt_us / 1000.0,
@@ -1175,8 +1176,9 @@ static void record_presented_frame_latency(RemoteLatencyStats *latency,
     }
 
     fprintf(stderr,
-            "[SameBoy Link][timing] remote_latency input_sequence=%u total_ms=%.3f event_to_send_ms=%.3f input_network_ms=%.3f host_receive_to_apply_ms=%.3f host_apply_to_frame_ms=%.3f frame_to_encode_ms=%.3f encode_ms=%.3f video_network_ms=%.3f receive_span_ms=%.3f decode_ms=%.3f upload_ms=%.3f present_call_ms=%.3f rtt_ms=%.3f clock_uncertainty_ms=%.3f\n",
+            "[SameBoy Link][timing] remote_latency input_sequence=%u t_ms=%llu total_ms=%.3f event_to_send_ms=%.3f input_network_ms=%.3f host_receive_to_apply_ms=%.3f host_apply_to_frame_ms=%.3f frame_to_encode_ms=%.3f encode_ms=%.3f video_network_ms=%.3f receive_span_ms=%.3f decode_ms=%.3f upload_ms=%.3f present_call_ms=%.3f rtt_ms=%.3f clock_uncertainty_ms=%.3f\n",
             frame->input_sequence,
+            (unsigned long long)client_elapsed_ms(),
             total_ms,
             duration_ms(frame->client_input_send_timestamp_us,
                         frame->client_input_event_timestamp_us),
