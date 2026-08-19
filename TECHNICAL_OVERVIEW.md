@@ -4,7 +4,7 @@ This document is the high-level technical introduction for contributors. For the
 
 ## Current snapshot — 2026-08-19
 
-The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v5 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with lossless native-framebuffer video and adaptive 48 kHz stereo PCM. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Adaptive-PCM tuning, optional lower-bandwidth video, authentication, encryption and production-grade Internet connectivity remain planned work.
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v6 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the protocol-v5 lossless native-framebuffer/adaptive-PCM media path. Protocol v6 retains that path and adds an explicit pre-media handshake plus visible connection and mismatch status; automated loopback and negative-path tests pass, while a physical v6 run remains pending. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Adaptive-PCM tuning, optional lower-bandwidth video, authentication, encryption and production-grade Internet connectivity remain planned work.
 
 ## 1. Why SameBoy
 
@@ -184,7 +184,33 @@ Keep audio identifiable per emulator core.
 
 Host local audio can select/mix P1 and P2. Remote Play normally sends the P2 stream to the client using small blocks and a deliberately bounded jitter buffer.
 
-Protocol v5 currently sends uncompressed 48 kHz stereo PCM with an adaptive jitter buffer. Physical LAN and Internet testing found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
+Protocol v6 retains protocol v5's uncompressed 48 kHz stereo PCM and adaptive jitter buffer unchanged. Physical LAN and Internet testing of v5 found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
+
+Before sending input or accepting media, the v6 client sends a fixed-size
+bootstrap `Hello`. The host replies to that source endpoint with `Accepted`,
+`Session mismatch` or `Protocol mismatch`; only an accepted endpoint may send
+input and clock packets. The client repeats this lightweight exchange every
+500 ms as connection liveness, changes to `Waiting` after 500 ms without an
+initial answer and returns to it after two seconds without a host response.
+Handshake replies use endpoint-specific sends so a mismatched probe cannot
+replace the active media peer. This exchange is a status/compatibility
+foundation, not authentication or encryption.
+
+After the first accepted input packet, P1 receives a two-second dedicated
+`Player 2 connected` notice on the local primary framebuffer. The Remote Client
+independently overlays `Player 1 connected` on its copied presentation frame
+for two seconds after the accepted handshake. Host OSD is restricted to the
+primary slot while Remote Host is active, so local P1 notices are never encoded
+into the P2 framebuffer sent over UDP. Connection notices intentionally remain
+visible even when the optional general OSD setting is disabled. Neither notice
+adds a media queue.
+
+Disconnect feedback is symmetric. After the host's 500 ms input timeout, P1
+shows `Player 2 disconnected`. After two seconds without a handshake response,
+P2 overlays `Player 1 disconnected` on the last locally copied gameplay frame
+for two seconds and then replaces it with `Waiting for host`. A later accepted
+handshake and fresh frame show the connected notice again. These transitions
+are presentation-only and do not preserve or replay stale input.
 
 Clock checkpoints and input-to-present samples also carry client elapsed time.
 Schema-v4 reports group smoothed RTT/jitter plus video-network and total latency

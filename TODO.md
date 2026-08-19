@@ -179,12 +179,12 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 
 - [ ] Polish the normal SameBoy `Link` menu and session dialogs.
 - [ ] Polish P1/P2 controller assignment and validation feedback.
-- [ ] Connection-status UI, including waiting/session-mismatch feedback before the first client frame.
+- [x] Connection-status UI before the first client frame plus per-player connected/disconnected gameplay notices and client transition back to waiting.
 - [ ] Quality preset UI.
 - [ ] Compatibility matrix.
 - [x] Exportable diagnostic logs.
 - [ ] Windows packaging.
-- [x] Automated one-PC Windows smoke/regression test for single-player, Local Link and OpenGL/SDL Remote Play loopback.
+- [x] Automated one-PC Windows smoke/regression test for single-player, Local Link, OpenGL/SDL Remote Play loopback and handshake error paths.
 - [x] Contributor/development setup notes.
 
 ## Optional later — Native NetLink

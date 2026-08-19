@@ -256,6 +256,52 @@ void remote_udp_set_peer(RemoteUdpSocket *transport, const RemoteUdpEndpoint *pe
     transport->has_peer = true;
 }
 
+bool remote_udp_endpoint_equal(const RemoteUdpEndpoint *left,
+                               const RemoteUdpEndpoint *right)
+{
+    if (!left || !right || left->size < sizeof(struct sockaddr_in) ||
+        right->size < sizeof(struct sockaddr_in) ||
+        left->size > sizeof(left->storage) ||
+        right->size > sizeof(right->storage)) {
+        return false;
+    }
+    const struct sockaddr_in *left_address =
+        (const struct sockaddr_in *)left->storage;
+    const struct sockaddr_in *right_address =
+        (const struct sockaddr_in *)right->storage;
+    return left_address->sin_family == AF_INET &&
+           right_address->sin_family == AF_INET &&
+           left_address->sin_port == right_address->sin_port &&
+           left_address->sin_addr.s_addr == right_address->sin_addr.s_addr;
+}
+
+bool remote_udp_send_to(RemoteUdpSocket *transport,
+                        const RemoteUdpEndpoint *endpoint,
+                        const uint8_t *data,
+                        size_t size,
+                        char *error,
+                        size_t error_size)
+{
+    if (!endpoint || !endpoint->size || endpoint->size > sizeof(endpoint->storage)) {
+        if (error && error_size) {
+            snprintf(error, error_size, "UDP endpoint is not configured");
+        }
+        return false;
+    }
+
+    int sent = sendto(get_socket(transport),
+                      (const char *)data,
+                      (int)size,
+                      0,
+                      (const struct sockaddr *)endpoint->storage,
+                      endpoint->size);
+    if (sent != (int)size) {
+        set_error(error, error_size, "UDP send failed", last_socket_error());
+        return false;
+    }
+    return true;
+}
+
 bool remote_udp_send(RemoteUdpSocket *transport,
                      const uint8_t *data,
                      size_t size,
@@ -269,17 +315,12 @@ bool remote_udp_send(RemoteUdpSocket *transport,
         return false;
     }
 
-    int sent = sendto(get_socket(transport),
-                      (const char *)data,
-                      (int)size,
-                      0,
-                      (const struct sockaddr *)transport->peer.storage,
-                      transport->peer.size);
-    if (sent != (int)size) {
-        set_error(error, error_size, "UDP send failed", last_socket_error());
-        return false;
-    }
-    return true;
+    return remote_udp_send_to(transport,
+                              &transport->peer,
+                              data,
+                              size,
+                              error,
+                              error_size);
 }
 
 void remote_udp_close(RemoteUdpSocket *transport)

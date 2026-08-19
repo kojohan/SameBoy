@@ -348,6 +348,6 @@ public-facing Internet release.
 ## Recommended implementation order
 
 1. Complete the remaining fixed-role Ethernet/Wi-Fi baseline repetitions using the physically verified schema-v4 timing windows.
-2. Revisit PCM, priority scheduling or chunk pacing only if the accepted protocol-v5 baseline shows an audible, visible or repeatable measurable need.
+2. Physically verify protocol v6's handshake while retaining the accepted protocol-v5 media baseline; revisit PCM, priority scheduling or chunk pacing only if an audible, visible or repeatable measurable need appears.
 3. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
 4. Run controlled impairment and longer Internet regressions.

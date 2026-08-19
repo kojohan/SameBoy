@@ -93,7 +93,7 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
-**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable baseline. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable media baseline. Protocol v6 retains that media behavior and adds a handshake/status layer; automated verification passes and a physical v6 run remains. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
 
 **Goal:** provide good image quality without adding unnecessary latency.
 
@@ -108,8 +108,8 @@ Client-side presentation remains local so nearest-neighbour scaling, integer sca
 Candidate backends include raw/reference transport, fast lossless compression, tile/XOR delta methods, conventional low-latency codecs, and optional GPU hardware encode/decode where measurement shows a benefit.
 
 Before adding another codec, this phase prioritizes the implemented machine-
-readable performance gate and adaptive-PCM telemetry/tuning. Protocol v5 keeps
-the single latest-complete-frame policy and uses larger MTU-safe video payloads
+readable performance gate and adaptive-PCM telemetry/tuning. Protocol v6 keeps
+protocol v5's single latest-complete-frame policy and larger MTU-safe video payloads
 instead of adding presentation buffering. Three repeated Wi-Fi/Wi-Fi runs
 measured 34.5–37.9 ms average input-to-present latency, 45.7–53.3 ms p95 and
 0.71–0.92% completed frames superseded before presentation. See
@@ -231,6 +231,13 @@ Deliverables:
 - packaging/update strategy;
 - compatibility matrix;
 - automated smoke/regression testing.
+
+The first connection-status slice is complete in protocol v6: Remote Client
+shows connecting, waiting, session mismatch, protocol mismatch and connected
+before the first media frame. Both players also receive local connected and
+disconnected gameplay notices, with P2 returning to waiting after its brief
+disconnect notice. Direct/relay path labels remain part of the
+future zero-configuration connectivity work.
 
 ---
 

@@ -7,6 +7,8 @@
 #define AUDIO_PACKET_TYPE 3
 #define CLOCK_SYNC_PING_PACKET_TYPE 4
 #define CLOCK_SYNC_PONG_PACKET_TYPE 5
+#define HANDSHAKE_HELLO_PACKET_TYPE 6
+#define HANDSHAKE_RESPONSE_PACKET_TYPE 7
 #define VALID_BUTTON_MASK 0xFF
 #define AUDIO_CHANNELS_STEREO 2
 
@@ -46,6 +48,91 @@ static uint32_t read_u32(const uint8_t *input)
 static uint64_t read_u64(const uint8_t *input)
 {
     return (uint64_t)read_u32(input) << 32 | read_u32(input + 4);
+}
+
+static bool has_packet_header(const uint8_t *data, size_t size, uint8_t packet_type)
+{
+    return data && size >= 8 &&
+           data[0] == 'S' && data[1] == 'B' && data[2] == 'L' && data[3] == 'K' &&
+           data[6] == packet_type;
+}
+
+void remote_play_encode_handshake_hello(
+    uint8_t output[REMOTE_PLAY_HANDSHAKE_HELLO_SIZE],
+    const RemotePlayHandshakeHello *hello)
+{
+    output[0] = 'S';
+    output[1] = 'B';
+    output[2] = 'L';
+    output[3] = 'K';
+    write_u16(output + 4, hello->protocol_version);
+    output[6] = HANDSHAKE_HELLO_PACKET_TYPE;
+    output[7] = 0;
+    write_u32(output + 8, hello->session_id);
+    write_u64(output + 12, hello->request_id);
+    write_u32(output + 20, 0);
+}
+
+bool remote_play_decode_handshake_hello(RemotePlayHandshakeHello *hello,
+                                        const uint8_t *data,
+                                        size_t size)
+{
+    if (!hello || size != REMOTE_PLAY_HANDSHAKE_HELLO_SIZE ||
+        !has_packet_header(data, size, HANDSHAKE_HELLO_PACKET_TYPE) ||
+        data[7] != 0 || read_u16(data + 4) == 0 ||
+        read_u32(data + 8) == 0 || read_u64(data + 12) == 0 ||
+        read_u32(data + 20) != 0) {
+        return false;
+    }
+
+    *hello = (RemotePlayHandshakeHello){
+        .protocol_version = read_u16(data + 4),
+        .session_id = read_u32(data + 8),
+        .request_id = read_u64(data + 12),
+    };
+    return true;
+}
+
+void remote_play_encode_handshake_response(
+    uint8_t output[REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE],
+    const RemotePlayHandshakeResponse *response)
+{
+    output[0] = 'S';
+    output[1] = 'B';
+    output[2] = 'L';
+    output[3] = 'K';
+    write_u16(output + 4, response->protocol_version);
+    output[6] = HANDSHAKE_RESPONSE_PACKET_TYPE;
+    output[7] = (uint8_t)response->status;
+    write_u32(output + 8, response->session_id);
+    write_u64(output + 12, response->request_id);
+    write_u64(output + 20, response->host_id);
+    write_u32(output + 28, 0);
+}
+
+bool remote_play_decode_handshake_response(RemotePlayHandshakeResponse *response,
+                                           const uint8_t *data,
+                                           size_t size)
+{
+    if (!response || size != REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE ||
+        !has_packet_header(data, size, HANDSHAKE_RESPONSE_PACKET_TYPE) ||
+        read_u16(data + 4) == 0 || read_u32(data + 8) == 0 ||
+        read_u64(data + 12) == 0 || read_u64(data + 20) == 0 ||
+        read_u32(data + 28) != 0 ||
+        (data[7] != REMOTE_PLAY_HANDSHAKE_ACCEPTED &&
+         data[7] != REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH &&
+         data[7] != REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH)) {
+        return false;
+    }
+
+    *response = (RemotePlayHandshakeResponse){
+        .protocol_version = read_u16(data + 4),
+        .session_id = read_u32(data + 8),
+        .request_id = read_u64(data + 12),
+        .host_id = read_u64(data + 20),
+        .status = (RemotePlayHandshakeStatus)data[7],
+    };
+    return true;
 }
 
 void remote_play_encode_input_packet(uint8_t output[REMOTE_PLAY_INPUT_PACKET_SIZE],

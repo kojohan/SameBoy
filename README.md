@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v5 Remote Play is playable over Ethernet and Wi-Fi and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v6 adds an explicit connection handshake and visible waiting/session/protocol status while retaining protocol v5's physically verified low-latency media path. The v5 path is playable over Ethernet and Wi-Fi and passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -96,9 +96,15 @@ Start here depending on what you want to know:
 The completed foundation now includes the reproducible Windows build, dual-core
 Local Link, explicit session modes, persistent independent controls, menu-driven
 Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
-settings-capable Remote Client with local SameBoy shaders/filters. Protocol v5
-reduces lossless-video datagram count without adding a frame queue, and repeated
-Wi-Fi/Wi-Fi play is the accepted current baseline. Bounded client-side audio
+settings-capable Remote Client with local SameBoy shaders/filters. Protocol v6
+adds an explicit `Hello`/response handshake and visible `Connecting`, `Waiting`,
+session-mismatch, protocol-mismatch and `Connected` states. When play begins,
+P1 briefly sees `Player 2 connected` and P2 sees `Player 1 connected` directly
+on their respective gameplay images. If either peer disappears, the remaining
+player receives the corresponding `Player 2 disconnected` or
+`Player 1 disconnected` notice; P2 then transitions to `Waiting for host`. It retains protocol
+v5's media formats and reduced lossless-video datagram count without adding a
+frame queue; repeated Wi-Fi/Wi-Fi v5 play is the accepted media baseline. Bounded client-side audio
 arrival histograms now provide session and ten-second p50/p95/p99 measurements
 without per-packet logging. A physical Wi-Fi/Wi-Fi verification had no audible
 audio faults, so the current low-latency PCM settings remain unchanged. The next
@@ -106,7 +112,7 @@ work is:
 
 1. complete the remaining fixed-role baseline matrix using the physically verified ten-second RTT/jitter/video/total-latency windows;
 2. revisit PCM, priority scheduling or lower-bandwidth video only when repeated audible/visible evidence justifies it;
-3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
+3. build session authentication and encryption on the v6 handshake, then add coordination, NAT traversal and relay fallback.
 
 See [REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md),
 [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.

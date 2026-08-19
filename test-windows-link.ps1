@@ -183,7 +183,8 @@ function Invoke-RemoteLoopback {
         [Parameter(Mandatory)][int]$Port,
         [Parameter(Mandatory)][uint32]$TestSessionId,
         [Parameter(Mandatory)][string]$ExpectedPresentation,
-        [switch]$DisableClientGl
+        [switch]$DisableClientGl,
+        [switch]$StopHostFirst
     )
 
     Write-Host "[RUN ] $Name"
@@ -240,6 +241,12 @@ function Invoke-RemoteLoopback {
                           -Pattern "remote_input_host client_active first_sequence=1" `
                           -Description "$Name host input reception"
         Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_host_notice text=player_2_connected duration_frames=120" `
+                          -Description "$Name Player 2 host notice"
+        Assert-LogPattern -Path $clientTest.StderrPath `
+                          -Pattern "remote_client_notice text=player_1_connected duration_ms=2000" `
+                          -Description "$Name Player 1 client notice"
+        Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_video_host first_stream_frame=1" `
                           -Description "$Name host video transmission"
         Assert-LogPattern -Path $hostTest.StderrPath `
@@ -251,7 +258,23 @@ function Invoke-RemoteLoopback {
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_audio_host packets=([6-9][0-9]{2}|[0-9]{4,}) dropped=0" `
                           -Description "$Name host audio transmission"
-        Stop-TestProcess -Process $clientTest.Process
+        if ($StopHostFirst) {
+            Stop-TestProcess -Process $hostTest.Process
+            Wait-LogPattern -Path $clientTest.StderrPath `
+                            -Pattern "remote_client_notice text=player_1_disconnected duration_ms=2000" `
+                            -Description "$Name Player 1 disconnect notice" `
+                            -Process $clientTest.Process `
+                            -Timeout $TimeoutSeconds
+            Stop-TestProcess -Process $clientTest.Process
+        }
+        else {
+            Stop-TestProcess -Process $clientTest.Process
+            Wait-LogPattern -Path $hostTest.StderrPath `
+                            -Pattern "remote_host_notice text=player_2_disconnected duration_frames=120" `
+                            -Description "$Name Player 2 disconnect notice" `
+                            -Process $hostTest.Process `
+                            -Timeout $TimeoutSeconds
+        }
         Assert-LogPattern -Path $clientTest.StderrPath `
                           -Pattern "remote_audio_arrival_window .*samples=[1-9][0-9]*.*p50_ms=.*p95_ms=.*p99_ms=.*maximum_ms=" `
                           -Description "$Name client audio arrival window telemetry"
@@ -262,6 +285,168 @@ function Invoke-RemoteLoopback {
         Write-Host "[PASS] $Name"
     }
     finally {
+        if ($clientTest) {
+            Stop-TestProcess -Process $clientTest.Process
+        }
+        if ($hostTest) {
+            Stop-TestProcess -Process $hostTest.Process
+        }
+    }
+}
+
+function Set-UdpU16BigEndian {
+    param([byte[]]$Buffer, [int]$Offset, [uint16]$Value)
+
+    $Buffer[$Offset] = [byte](($Value -shr 8) -band 0xff)
+    $Buffer[$Offset + 1] = [byte]($Value -band 0xff)
+}
+
+function Set-UdpU32BigEndian {
+    param([byte[]]$Buffer, [int]$Offset, [uint32]$Value)
+
+    for ($index = 0; $index -lt 4; $index++) {
+        $shift = (3 - $index) * 8
+        $Buffer[$Offset + $index] = [byte](($Value -shr $shift) -band 0xff)
+    }
+}
+
+function Set-UdpU64BigEndian {
+    param([byte[]]$Buffer, [int]$Offset, [uint64]$Value)
+
+    for ($index = 0; $index -lt 8; $index++) {
+        $shift = (7 - $index) * 8
+        $Buffer[$Offset + $index] = [byte](($Value -shr $shift) -band 0xff)
+    }
+}
+
+function Get-UdpU16BigEndian {
+    param([byte[]]$Buffer, [int]$Offset)
+
+    return [uint16](([uint16]$Buffer[$Offset] -shl 8) -bor $Buffer[$Offset + 1])
+}
+
+function Invoke-RemoteHandshakeDiagnostics {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)][uint32]$TestSessionId
+    )
+
+    Write-Host "[RUN ] remote-handshake-errors"
+    Assert-PortAvailable -Port $Port
+    $hostTest = $null
+    $clientTest = $null
+    $probe = $null
+    try {
+        $waitingArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $TestSessionId.ToString()
+        )
+        $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-waiting-client" `
+                                               -Arguments $waitingArguments
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_handshake_client status=waiting client_protocol=6 host_protocol=0" `
+                        -Description "client waiting-for-host status" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Stop-TestProcess -Process $clientTest.Process
+        $clientTest = $null
+
+        $probe = [System.Net.Sockets.UdpClient]::new($Port)
+        $probe.Client.ReceiveTimeout = $TimeoutSeconds * 1000
+        $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-protocol-mismatch-client" `
+                                               -Arguments $waitingArguments
+        $clientSender = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+        [byte[]]$clientHello = $probe.Receive([ref]$clientSender)
+        if ($clientHello.Length -ne 24 -or $clientHello[6] -ne 6) {
+            throw "Client sent an invalid handshake hello."
+        }
+        [byte[]]$mismatchResponse = New-Object byte[] 32
+        [System.Text.Encoding]::ASCII.GetBytes("SBLK").CopyTo($mismatchResponse, 0)
+        Set-UdpU16BigEndian -Buffer $mismatchResponse -Offset 4 -Value 5
+        $mismatchResponse[6] = 7
+        $mismatchResponse[7] = 3
+        [Array]::Copy($clientHello, 8, $mismatchResponse, 8, 12)
+        Set-UdpU64BigEndian -Buffer $mismatchResponse -Offset 20 -Value 1
+        $null = $probe.Send($mismatchResponse,
+                            $mismatchResponse.Length,
+                            $clientSender)
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_handshake_client status=protocol_mismatch client_protocol=6 host_protocol=5" `
+                        -Description "client protocol mismatch status" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Stop-TestProcess -Process $clientTest.Process
+        $clientTest = $null
+        $probe.Dispose()
+        $probe = $null
+
+        $hostArguments = @(
+            "--remote-input-host", $Port.ToString(),
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-host-view", "p1",
+            $script:QuotedRomPath
+        )
+        $hostTest = Start-SameBoyTestProcess -Name "remote-handshake-errors-host" `
+                                             -Arguments $hostArguments
+        Wait-LogPattern -Path $hostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port" `
+                        -Description "handshake diagnostic host startup" `
+                        -Process $hostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $wrongSessionId = [uint32]($TestSessionId + 1)
+        $clientArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $wrongSessionId.ToString()
+        )
+        $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-session-mismatch-client" `
+                                               -Arguments $clientArguments
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_handshake_client status=session_mismatch client_protocol=6 host_protocol=6" `
+                        -Description "client session mismatch status" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_handshake_host status=session_mismatch client_protocol=6 host_protocol=6" `
+                          -Description "host session mismatch response"
+        if ((Read-Log -Path $hostTest.StderrPath) -match "remote_input_host client_active") {
+            throw "Session-mismatched client was incorrectly activated by the host."
+        }
+        Stop-TestProcess -Process $clientTest.Process
+        $clientTest = $null
+
+        $probe = [System.Net.Sockets.UdpClient]::new()
+        $probe.Client.ReceiveTimeout = $TimeoutSeconds * 1000
+        $probe.Connect("127.0.0.1", $Port)
+        [byte[]]$hello = New-Object byte[] 24
+        [System.Text.Encoding]::ASCII.GetBytes("SBLK").CopyTo($hello, 0)
+        Set-UdpU16BigEndian -Buffer $hello -Offset 4 -Value 65535
+        $hello[6] = 6
+        Set-UdpU32BigEndian -Buffer $hello -Offset 8 -Value $TestSessionId
+        [uint64]$requestId = 0x0102030405060708
+        Set-UdpU64BigEndian -Buffer $hello -Offset 12 -Value $requestId
+        $null = $probe.Send($hello, $hello.Length)
+        $sender = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+        [byte[]]$response = $probe.Receive([ref]$sender)
+        if ($response.Length -ne 32 -or
+            [System.Text.Encoding]::ASCII.GetString($response, 0, 4) -ne "SBLK" -or
+            (Get-UdpU16BigEndian -Buffer $response -Offset 4) -ne 6 -or
+            $response[6] -ne 7 -or
+            $response[7] -ne 3) {
+            throw "Host returned an invalid protocol-mismatch handshake response."
+        }
+        Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_handshake_host status=protocol_mismatch client_protocol=65535 host_protocol=6" `
+                          -Description "host protocol mismatch response"
+        Assert-NoFatalLog -Paths @($hostTest.StderrPath)
+        Write-Host "[PASS] remote-handshake-errors"
+    }
+    finally {
+        if ($probe) {
+            $probe.Dispose()
+        }
         if ($clientTest) {
             Stop-TestProcess -Process $clientTest.Process
         }
@@ -314,7 +499,10 @@ try {
                           -Port ($BasePort + 1) `
                           -TestSessionId ($SessionId + 1) `
                           -ExpectedPresentation "SDL" `
-                          -DisableClientGl
+                          -DisableClientGl `
+                          -StopHostFirst
+    Invoke-RemoteHandshakeDiagnostics -Port ($BasePort + 2) `
+                                      -TestSessionId ($SessionId + 2)
 
     Write-Host ""
     Write-Host "All SameBoy Link Windows smoke tests passed."

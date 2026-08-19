@@ -28,6 +28,16 @@ static void reset_audio_queue(RemotePlayHost *host)
     host->audio_queue_count = 0;
 }
 
+static const char *handshake_status_name(RemotePlayHandshakeStatus status)
+{
+    switch (status) {
+        case REMOTE_PLAY_HANDSHAKE_ACCEPTED: return "accepted";
+        case REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH: return "session_mismatch";
+        case REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH: return "protocol_mismatch";
+    }
+    return "unknown";
+}
+
 bool remote_play_host_start(RemotePlayHost *host,
                             GameSession *session,
                             uint16_t port,
@@ -43,6 +53,8 @@ bool remote_play_host_start(RemotePlayHost *host,
     host->session = session;
     host->session_id = session_id;
     host->port = port;
+    host->host_id = monotonic_time_us();
+    if (!host->host_id) host->host_id = 1;
     host->audio_codec = REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE;
     host->active = true;
     sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
@@ -79,10 +91,72 @@ void remote_play_host_poll(RemotePlayHost *host)
         }
 
         uint64_t receive_time = monotonic_time_us();
+        RemotePlayHandshakeHello hello;
+        if (remote_play_decode_handshake_hello(&hello, data, size)) {
+            RemotePlayHandshakeStatus status = REMOTE_PLAY_HANDSHAKE_ACCEPTED;
+            if (hello.protocol_version != REMOTE_PLAY_PROTOCOL_VERSION) {
+                status = REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH;
+            }
+            else if (hello.session_id != host->session_id) {
+                status = REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH;
+            }
+
+            if (status == REMOTE_PLAY_HANDSHAKE_ACCEPTED) {
+                bool peer_changed = !host->handshake_complete ||
+                    !remote_udp_endpoint_equal(&sender, &host->transport.peer);
+                if (peer_changed && host->client_connected) {
+                    multiplayer_input_apply_button_mask(host->session, 0);
+                    host->last_buttons = 0;
+                    host->client_connected = false;
+                    host->has_sequence = false;
+                    reset_audio_queue(host);
+                }
+                remote_udp_set_peer(&host->transport, &sender);
+                host->handshake_complete = true;
+            }
+
+            RemotePlayHandshakeResponse response = {
+                .protocol_version = REMOTE_PLAY_PROTOCOL_VERSION,
+                .session_id = hello.session_id,
+                .request_id = hello.request_id,
+                .host_id = host->host_id,
+                .status = status,
+            };
+            uint8_t encoded[REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE];
+            remote_play_encode_handshake_response(encoded, &response);
+            if (remote_udp_send_to(&host->transport,
+                                   &sender,
+                                   encoded,
+                                   sizeof(encoded),
+                                   error,
+                                   sizeof(error))) {
+                host->handshake_responses++;
+            }
+            else {
+                sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                                 "remote_handshake_host send_error=%s",
+                                 error);
+            }
+            host->handshake_requests++;
+            if (!host->has_handshake_status ||
+                status != host->last_handshake_status) {
+                sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                                 "remote_handshake_host status=%s client_protocol=%u host_protocol=%u requested_session=%u",
+                                 handshake_status_name(status),
+                                 hello.protocol_version,
+                                 REMOTE_PLAY_PROTOCOL_VERSION,
+                                 hello.session_id);
+                host->last_handshake_status = status;
+                host->has_handshake_status = true;
+            }
+            continue;
+        }
+
         RemotePlayClockSyncPing ping;
         if (remote_play_decode_clock_sync_ping(&ping, data, size) &&
-            ping.session_id == host->session_id) {
-            remote_udp_set_peer(&host->transport, &sender);
+            ping.session_id == host->session_id &&
+            host->handshake_complete &&
+            remote_udp_endpoint_equal(&sender, &host->transport.peer)) {
             RemotePlayClockSyncPong pong = {
                 .session_id = host->session_id,
                 .sequence = ping.sequence,
@@ -110,7 +184,9 @@ void remote_play_host_poll(RemotePlayHost *host)
 
         RemotePlayInputPacket packet;
         if (!remote_play_decode_input_packet(&packet, data, size) ||
-            packet.session_id != host->session_id) {
+            packet.session_id != host->session_id ||
+            !host->handshake_complete ||
+            !remote_udp_endpoint_equal(&sender, &host->transport.peer)) {
             host->rejected_packets++;
             continue;
         }
@@ -120,7 +196,6 @@ void remote_play_host_poll(RemotePlayHost *host)
             continue;
         }
 
-        remote_udp_set_peer(&host->transport, &sender);
         uint16_t previous_buttons = host->last_buttons;
         uint64_t receive_gap = host->last_receive_time_us?
             receive_time - host->last_receive_time_us : 0;
@@ -138,6 +213,7 @@ void remote_play_host_poll(RemotePlayHost *host)
         if (!host->client_connected) {
             reset_audio_queue(host);
             host->client_connected = true;
+            host->client_connected_notice_pending = true;
             sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
                              "remote_input_host client_active first_sequence=%u",
                              packet.sequence);
@@ -162,11 +238,30 @@ void remote_play_host_poll(RemotePlayHost *host)
         multiplayer_input_apply_button_mask(host->session, 0);
         host->last_buttons = 0;
         host->client_connected = false;
+        host->client_disconnected_notice_pending = true;
         reset_audio_queue(host);
         sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
                          "remote_input_host client_timeout timeout_ms=%u",
                          REMOTE_INPUT_TIMEOUT_US / 1000);
     }
+}
+
+bool remote_play_host_take_client_connected_notice(RemotePlayHost *host)
+{
+    if (!host || !host->client_connected_notice_pending) {
+        return false;
+    }
+    host->client_connected_notice_pending = false;
+    return true;
+}
+
+bool remote_play_host_take_client_disconnected_notice(RemotePlayHost *host)
+{
+    if (!host || !host->client_disconnected_notice_pending) {
+        return false;
+    }
+    host->client_disconnected_notice_pending = false;
+    return true;
 }
 
 void remote_play_host_set_audio_sample_rate(RemotePlayHost *host, uint32_t sample_rate)
@@ -533,6 +628,11 @@ void remote_play_host_stop(RemotePlayHost *host)
                      host->last_sequence,
                      (unsigned long long)host->last_input_gap_us,
                      (unsigned long long)host->max_input_gap_us);
+    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                     "remote_handshake_host stopped requests=%llu responses=%llu completed=%s",
+                     (unsigned long long)host->handshake_requests,
+                     (unsigned long long)host->handshake_responses,
+                     host->handshake_complete? "yes" : "no");
     sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
                      "remote_video_host stopped frames_sent=%llu frames_dropped=%llu chunks_sent=%llu raw_bytes=%llu encoded_bytes=%llu encoded_ratio=%.3f average_burst_us=%.1f maximum_burst_us=%llu slow_bursts=%llu maximum_chunks_per_frame=%u",
                      (unsigned long long)host->video_frames_sent,

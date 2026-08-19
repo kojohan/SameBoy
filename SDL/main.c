@@ -46,6 +46,8 @@ GameSession game_session;
 static LocalLink local_link;
 static RemotePlayHost remote_input_host;
 static bool remote_host_show_p2 = true;
+static unsigned remote_connection_notice_countdown = 0;
+static const char *remote_connection_notice_text = NULL;
 static bool paused = false;
 static bool underclock_down = false, rewind_down = false, do_rewind = false, rewind_paused = false, turbo_down = false;
 static bool rapid_a = false, rapid_b = false;
@@ -952,7 +954,9 @@ static void vblank(GB_gameboy_t *gb, GB_vblank_type_t type)
         save_screenshot();
     }
     
-    if (osd_countdown && configuration.osd) {
+    if (osd_countdown && configuration.osd &&
+        (!remote_input_host.active ||
+         slot == game_session_primary_slot(&game_session))) {
         if (osd_countdown != 1) {
             unsigned width = GB_get_screen_width(gb);
             unsigned height = GB_get_screen_height(gb);
@@ -962,6 +966,23 @@ static void vblank(GB_gameboy_t *gb, GB_vblank_type_t type)
                       true);
         }
         osd_countdown--;
+    }
+    if (remote_connection_notice_countdown && remote_input_host.active &&
+        slot == game_session_primary_slot(&game_session)) {
+        if (remote_connection_notice_countdown != 1) {
+            unsigned width = GB_get_screen_width(gb);
+            unsigned height = GB_get_screen_height(gb);
+            draw_text(slot->active_pixel_buffer,
+                      width,
+                      height,
+                      8,
+                      height - 20,
+                      remote_connection_notice_text,
+                      rgb_encode(gb, 255, 255, 255),
+                      rgb_encode(gb, 0, 0, 0),
+                      true);
+        }
+        remote_connection_notice_countdown--;
     }
     if (local_link.connected) {
         latch_local_link_frame(slot, type);
@@ -1811,6 +1832,20 @@ static void run(void)
     /* Run emulation */
     while (true) {
         remote_play_host_poll(&remote_input_host);
+        if (remote_play_host_take_client_connected_notice(&remote_input_host)) {
+            remote_connection_notice_text = "Player 2 connected";
+            remote_connection_notice_countdown = 120;
+            sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                             "remote_host_notice text=player_2_connected duration_frames=%u",
+                             remote_connection_notice_countdown);
+        }
+        if (remote_play_host_take_client_disconnected_notice(&remote_input_host)) {
+            remote_connection_notice_text = "Player 2 disconnected";
+            remote_connection_notice_countdown = 120;
+            sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                             "remote_host_notice text=player_2_disconnected duration_frames=%u",
+                             remote_connection_notice_countdown);
+        }
         if (paused || rewind_paused) {
             SDL_WaitEvent(NULL);
             handle_events(gameboy);

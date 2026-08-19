@@ -31,9 +31,17 @@ int remote_udp_receive(RemoteUdpSocket *transport,
                        char *error,
                        size_t error_size);
 void remote_udp_set_peer(RemoteUdpSocket *transport, const RemoteUdpEndpoint *peer);
+bool remote_udp_endpoint_equal(const RemoteUdpEndpoint *left,
+                               const RemoteUdpEndpoint *right);
 bool remote_udp_send(RemoteUdpSocket *transport,
                      const uint8_t *data,
                      size_t size,
                      char *error,
                      size_t error_size);
+bool remote_udp_send_to(RemoteUdpSocket *transport,
+                        const RemoteUdpEndpoint *endpoint,
+                        const uint8_t *data,
+                        size_t size,
+                        char *error,
+                        size_t error_size);
 void remote_udp_close(RemoteUdpSocket *transport);

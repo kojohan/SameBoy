@@ -4,9 +4,9 @@ A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy
 
 ## Implementation checkpoint — 2026-08-19
 
-The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v5 provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread, latency telemetry and reduced video datagram count. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
+The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v6 adds an explicit status/compatibility handshake to protocol v5's full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, dedicated client network thread, latency telemetry and reduced video datagram count. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 v5 session.
 
-PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Protocol v5's zero-queue 1,280-byte video payload is accepted as the current Wi-Fi baseline after three physical repetitions; adaptive-PCM resilience remains the next optimization area. See `REMOTE_PLAY_PERFORMANCE_PLAN.md` before authenticated/encrypted sessions and zero-configuration Internet connectivity.
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Protocol v6 retains protocol v5's accepted zero-queue 1,280-byte Wi-Fi media baseline and now shows connecting, waiting, session mismatch, protocol mismatch, connected and per-player disconnect feedback instead of an unexplained empty client frame. See `REMOTE_PLAY_PERFORMANCE_PLAN.md` before authenticated/encrypted sessions and zero-configuration Internet connectivity.
 
 ## Product direction
 
@@ -372,6 +372,6 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 ## Next implementation tasks
 
 1. Complete the remaining fixed-role Ethernet/Wi-Fi performance matrix using the physically verified schema-v4 timing windows.
-2. Preserve the accepted PCM/protocol-v5 baseline unless repeated audible or visible evidence justifies more pacing/buffering work.
-3. Add session authentication and encryption before treating direct Internet play as a public feature.
+2. Physically verify protocol v6 while preserving the accepted protocol-v5 PCM/media behavior unless repeated audible or visible evidence justifies more pacing/buffering work.
+3. Build session authentication and encryption on the v6 handshake before treating direct Internet play as a public feature.
 4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

@@ -836,3 +836,88 @@ run. The result therefore closes physical schema-v4 verification without
 claiming that every callback was perceptually inspected. No PCM, video or queue
 behavior is changed; future tuning requires a repeatable audible or visible
 fault.
+
+### Protocol v6 connection handshake and pre-frame status
+
+The earlier two-PC test had shown that a wrong session ID produced only the
+Remote Client's empty background because the host silently discarded every
+packet. Protocol v6 adds fixed-size bootstrap `Hello` and response packets. The
+host can now answer `Accepted`, `Session mismatch` or `Protocol mismatch` even
+before ordinary version/session-gated media decoding. Input and clock packets
+are accepted only after a successful handshake and only from the accepted UDP
+endpoint. Mismatch replies use an endpoint-specific send and therefore do not
+replace an already selected media peer.
+
+Remote Client now renders `Connecting`, `Waiting for host`, `Session mismatch`,
+`Protocol mismatch` or `Connected` before the first media frame and mirrors the
+state in its window title and bounded transition logs. A lightweight 500 ms
+handshake repeat also supplies connection liveness; two seconds without a host
+response returns a connected client to `Waiting`. The media formats, 1,280-byte
+video payload, no-frame-queue policy and adaptive PCM behavior are unchanged
+from the physically accepted protocol-v5 baseline. The bootstrap request ID
+and host ID correlate replies but do not authenticate or encrypt the session.
+
+The warnings-as-errors Windows build passed. The one-PC suite now covers five
+paths: single-player, Local Link, OpenGL Remote Play, SDL Remote Play and
+handshake failures. It verified clean `Connecting` to `Connected` and
+`Connecting` to `Waiting` transitions, a real wrong-session client that never
+became active on the host, a fake v5 endpoint that made the v6 client display
+`Protocol mismatch`, and a raw incompatible-version probe that received the v6
+host's protocol-mismatch response. Logs are in
+`build/regression/automated-20260819-201532-19056`. The verified dirty runtime
+was published as `M:\SAME-LINKTEST\builds\handshake-v6`. Physical two-PC v6
+verification remains the next gate before calling the new wire version
+physically accepted.
+
+The subsequent UI pass adds transient in-game peer notices. On a new or
+re-established connection, the host consumes a one-shot event and shows
+`Player 2 connected` on P1 for roughly two seconds. The client independently
+draws `Player 1 connected` into its copied presentation frame for the same
+period after the handshake reaches `Connected`. Remote Host OSD rendering is
+now primary-slot-only; this prevents P1's local notice from being embedded in
+the P2 framebuffer transmitted to the client. No protocol packet, frame queue
+or media timing changed.
+
+The warnings-as-errors build and all five automated paths passed again. Both
+OpenGL and SDL loopbacks emitted the P1/P2 notice markers. Logs are in
+`build/regression/automated-20260819-203002-14968`; the verified runtime was
+published as `M:\SAME-LINKTEST\builds\handshake-v6-player-notices`.
+
+The first physical notice check did not show either gameplay message, although
+the full-window disconnect/waiting state worked. The host log
+`20260819-203148-134-LAPTOP-IUM1NOQG-host-e4aae1d0` proved that the correct
+notice build ran and that the host generated the event twice, including after
+an early input timeout/reconnect. The renderer still gated the text behind the
+ordinary `configuration.osd` preference, so the marker could be logged without
+being drawn. No new paired client log from that attempt reached the shared log
+root, which also left the client executable version unverified.
+
+Connection notices are now dedicated UI and ignore the optional general OSD
+preference on both sides. P1 uses its own primary-framebuffer countdown instead
+of the global OSD state; P2 retains its local copied-frame overlay without the
+configuration gate. The warnings-as-errors build and all five automated paths
+passed after the correction, with logs in
+`build/regression/automated-20260819-203639-17212`. The corrected runtime was
+published with a cache-distinct ID at
+`M:\SAME-LINKTEST\builds\handshake-v6-peer-notices-v2`.
+
+### Symmetric disconnect notices
+
+Connection loss now mirrors the successful connection feedback. The host sets
+a one-shot disconnect event when the existing 500 ms remote-input timeout
+releases P2's buttons; P1 displays `Player 2 disconnected` using the same
+dedicated primary-framebuffer notice path. On the client, a transition from
+`Connected` to `Waiting` preserves the last locally copied gameplay frame long
+enough to overlay `Player 1 disconnected` for two seconds. It then switches to
+the full-window `Waiting for host` state. Reconnection replaces the stale frame
+only after a fresh video frame and displays `Player 1 connected` again.
+
+The Windows build passed with warnings treated as errors. The expanded five-
+path regression stops the client first in the OpenGL case and the host first in
+the SDL case, proving both disconnect directions in addition to both connect
+notices. The OpenGL host recorded its input timeout followed by
+`player_2_disconnected`; the SDL client recorded `waiting` followed by
+`player_1_disconnected`. All tests passed; logs are in
+`build/regression/automated-20260819-210959-2820`. The verified complete
+connection-lifecycle runtime was published as
+`M:\SAME-LINKTEST\builds\handshake-v6-peer-lifecycle`.

@@ -4,7 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define REMOTE_PLAY_PROTOCOL_VERSION 5
+#define REMOTE_PLAY_PROTOCOL_VERSION 6
+#define REMOTE_PLAY_HANDSHAKE_HELLO_SIZE 24
+#define REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE 32
 #define REMOTE_PLAY_INPUT_PACKET_SIZE 36
 #define REMOTE_PLAY_CLOCK_SYNC_PING_SIZE 24
 #define REMOTE_PLAY_CLOCK_SYNC_PONG_SIZE 40
@@ -32,6 +34,26 @@
     (REMOTE_PLAY_AUDIO_HEADER_SIZE + REMOTE_PLAY_AUDIO_PACKET_MAX_PAYLOAD_SIZE)
 #define REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE 1
 #define REMOTE_PLAY_AUDIO_CODEC_OPUS 2
+
+typedef enum {
+    REMOTE_PLAY_HANDSHAKE_ACCEPTED = 1,
+    REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH = 2,
+    REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH = 3,
+} RemotePlayHandshakeStatus;
+
+typedef struct {
+    uint16_t protocol_version;
+    uint32_t session_id;
+    uint64_t request_id;
+} RemotePlayHandshakeHello;
+
+typedef struct {
+    uint16_t protocol_version;
+    uint32_t session_id;
+    uint64_t request_id;
+    uint64_t host_id;
+    RemotePlayHandshakeStatus status;
+} RemotePlayHandshakeResponse;
 
 typedef struct {
     uint32_t session_id;
@@ -88,6 +110,19 @@ typedef struct {
     uint8_t codec;
     const uint8_t *payload;
 } RemotePlayAudioPacket;
+
+void remote_play_encode_handshake_hello(
+    uint8_t output[REMOTE_PLAY_HANDSHAKE_HELLO_SIZE],
+    const RemotePlayHandshakeHello *hello);
+bool remote_play_decode_handshake_hello(RemotePlayHandshakeHello *hello,
+                                        const uint8_t *data,
+                                        size_t size);
+void remote_play_encode_handshake_response(
+    uint8_t output[REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE],
+    const RemotePlayHandshakeResponse *response);
+bool remote_play_decode_handshake_response(RemotePlayHandshakeResponse *response,
+                                           const uint8_t *data,
+                                           size_t size);
 
 void remote_play_encode_input_packet(uint8_t output[REMOTE_PLAY_INPUT_PACKET_SIZE],
                                      const RemotePlayInputPacket *packet);

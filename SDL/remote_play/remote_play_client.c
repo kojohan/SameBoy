@@ -11,6 +11,7 @@
 
 #include "../session/multiplayer_input.h"
 #include "../controller_input.h"
+#include "../font.h"
 #include "../gui.h"
 #include "protocol.h"
 #include "transport_udp.h"
@@ -18,6 +19,10 @@
 
 #define INPUT_KEEPALIVE_US 50000
 #define CLOCK_SYNC_INTERVAL_US 500000
+#define HANDSHAKE_INTERVAL_US 500000
+#define HANDSHAKE_WAITING_AFTER_US 500000
+#define HANDSHAKE_TIMEOUT_US 2000000
+#define CONNECTION_NOTICE_DURATION_US 2000000
 #define REMOTE_AUDIO_INITIAL_TARGET_MS 40
 #define REMOTE_AUDIO_MIN_TARGET_MS 40
 #define REMOTE_AUDIO_MAX_TARGET_MS 100
@@ -77,6 +82,26 @@ typedef struct {
     double average_total_ms;
     double maximum_total_ms;
 } RemoteLatencyStats;
+
+typedef enum {
+    REMOTE_CLIENT_CONNECTING,
+    REMOTE_CLIENT_WAITING,
+    REMOTE_CLIENT_SESSION_MISMATCH,
+    REMOTE_CLIENT_PROTOCOL_MISMATCH,
+    REMOTE_CLIENT_CONNECTED,
+} RemoteClientConnectionStatus;
+
+typedef struct {
+    uint64_t request_id;
+    uint64_t host_id;
+    uint64_t first_send_timestamp_us;
+    uint64_t last_send_timestamp_us;
+    uint64_t last_response_timestamp_us;
+    uint16_t host_protocol_version;
+    RemoteClientConnectionStatus status;
+    RemoteClientConnectionStatus logged_status;
+    bool has_logged_status;
+} RemoteClientHandshake;
 
 typedef struct {
     uint8_t frame_buffers[2][REMOTE_PLAY_VIDEO_MAX_ENCODED_SIZE];
@@ -165,6 +190,45 @@ static uint64_t client_elapsed_ms(void)
     uint64_t now = monotonic_time_us();
     return client_start_time_us && now >= client_start_time_us?
         (now - client_start_time_us) / 1000 : 0;
+}
+
+static const char *connection_status_name(RemoteClientConnectionStatus status)
+{
+    switch (status) {
+        case REMOTE_CLIENT_CONNECTING: return "connecting";
+        case REMOTE_CLIENT_WAITING: return "waiting";
+        case REMOTE_CLIENT_SESSION_MISMATCH: return "session_mismatch";
+        case REMOTE_CLIENT_PROTOCOL_MISMATCH: return "protocol_mismatch";
+        case REMOTE_CLIENT_CONNECTED: return "connected";
+    }
+    return "unknown";
+}
+
+static const char *connection_status_text(RemoteClientConnectionStatus status)
+{
+    switch (status) {
+        case REMOTE_CLIENT_CONNECTING: return "Connecting...";
+        case REMOTE_CLIENT_WAITING: return "Waiting for host";
+        case REMOTE_CLIENT_SESSION_MISMATCH: return "Session mismatch";
+        case REMOTE_CLIENT_PROTOCOL_MISMATCH: return "Protocol mismatch";
+        case REMOTE_CLIENT_CONNECTED: return "Connected";
+    }
+    return "Connection error";
+}
+
+static void set_connection_status(RemoteClientHandshake *handshake,
+                                  RemoteClientConnectionStatus status)
+{
+    handshake->status = status;
+    if (!handshake->has_logged_status || handshake->logged_status != status) {
+        fprintf(stderr,
+                "[SameBoy Link][frontend] remote_handshake_client status=%s client_protocol=%u host_protocol=%u\n",
+                connection_status_name(status),
+                REMOTE_PLAY_PROTOCOL_VERSION,
+                handshake->host_protocol_version);
+        handshake->logged_status = status;
+        handshake->has_logged_status = true;
+    }
 }
 
 static unsigned remote_audio_arrival_bucket(uint64_t gap_us)
@@ -276,6 +340,35 @@ static bool send_input(RemoteUdpSocket *transport,
         fprintf(stderr, "[SameBoy Link][frontend] remote_input_client send_error=%s\n", error);
         return false;
     }
+    return true;
+}
+
+static bool send_handshake(RemoteUdpSocket *transport,
+                           uint32_t session_id,
+                           RemoteClientHandshake *handshake)
+{
+    uint64_t now = monotonic_time_us();
+    if (!handshake->request_id) {
+        handshake->request_id = now? now : 1;
+    }
+    RemotePlayHandshakeHello hello = {
+        .protocol_version = REMOTE_PLAY_PROTOCOL_VERSION,
+        .session_id = session_id,
+        .request_id = handshake->request_id,
+    };
+    uint8_t encoded[REMOTE_PLAY_HANDSHAKE_HELLO_SIZE];
+    remote_play_encode_handshake_hello(encoded, &hello);
+    char error[128];
+    if (!remote_udp_send(transport, encoded, sizeof(encoded), error, sizeof(error))) {
+        fprintf(stderr,
+                "[SameBoy Link][frontend] remote_handshake_client send_error=%s\n",
+                error);
+        return false;
+    }
+    if (!handshake->first_send_timestamp_us) {
+        handshake->first_send_timestamp_us = now;
+    }
+    handshake->last_send_timestamp_us = now;
     return true;
 }
 
@@ -479,6 +572,107 @@ static void render_client_gl(SDL_Window *client_window,
     glViewport(0, 0, output_width, output_height);
     SDL_GL_SwapWindow(client_window);
     *present_end_time = monotonic_time_us();
+}
+
+static void draw_frame_text(uint32_t *pixels,
+                            unsigned width,
+                            unsigned height,
+                            signed x,
+                            signed y,
+                            const char *text,
+                            uint32_t color)
+{
+    while (*text) {
+        unsigned char character = (unsigned char)*text++;
+        if (character < ' ' || character > font_max) character = '?';
+        const uint8_t *glyph = &font[(character - ' ') * GLYPH_WIDTH * GLYPH_HEIGHT];
+        for (signed glyph_y = 0; glyph_y < GLYPH_HEIGHT; glyph_y++) {
+            for (signed glyph_x = 0; glyph_x < GLYPH_WIDTH; glyph_x++) {
+                signed pixel_x = x + glyph_x;
+                signed pixel_y = y + glyph_y;
+                if (glyph[glyph_y * GLYPH_WIDTH + glyph_x] &&
+                    pixel_x >= 0 && pixel_x < (signed)width &&
+                    pixel_y >= 0 && pixel_y < (signed)height) {
+                    pixels[pixel_y * width + pixel_x] = color;
+                }
+            }
+        }
+        x += GLYPH_WIDTH;
+    }
+}
+
+static void draw_centered_status_text(uint32_t *pixels,
+                                      signed y,
+                                      const char *text,
+                                      uint32_t color,
+                                      uint32_t border)
+{
+    size_t text_width = strlen(text) * GLYPH_WIDTH;
+    signed x = text_width < 160? (signed)(160 - text_width) / 2 : 1;
+    draw_frame_text(pixels, 160, 144, x - 1, y, text, border);
+    draw_frame_text(pixels, 160, 144, x + 1, y, text, border);
+    draw_frame_text(pixels, 160, 144, x, y - 1, text, border);
+    draw_frame_text(pixels, 160, 144, x, y + 1, text, border);
+    draw_frame_text(pixels, 160, 144, x, y, text, color);
+}
+
+static void build_connection_status_frame(uint32_t *pixels,
+                                          RemoteClientConnectionStatus status,
+                                          uint32_t session_id,
+                                          uint16_t host_protocol_version)
+{
+    uint32_t background = SDL_MapRGBA(pixel_format, 15, 22, 30, 255);
+    uint32_t foreground = SDL_MapRGBA(pixel_format, 232, 238, 245, 255);
+    uint32_t muted = SDL_MapRGBA(pixel_format, 142, 163, 184, 255);
+    uint32_t warning = SDL_MapRGBA(pixel_format, 255, 190, 92, 255);
+    uint32_t border = SDL_MapRGBA(pixel_format, 0, 0, 0, 255);
+    for (unsigned pixel = 0; pixel < 160 * 144; pixel++) {
+        pixels[pixel] = background;
+    }
+
+    draw_centered_status_text(pixels, 42, "SameBoy Link", foreground, border);
+    draw_centered_status_text(pixels,
+                              62,
+                              connection_status_text(status),
+                              (status == REMOTE_CLIENT_SESSION_MISMATCH ||
+                               status == REMOTE_CLIENT_PROTOCOL_MISMATCH)? warning : foreground,
+                              border);
+
+    char detail[64];
+    if (status == REMOTE_CLIENT_PROTOCOL_MISMATCH && host_protocol_version) {
+        snprintf(detail,
+                 sizeof(detail),
+                 "Client v%u / Host v%u",
+                 REMOTE_PLAY_PROTOCOL_VERSION,
+                 host_protocol_version);
+    }
+    else {
+        snprintf(detail, sizeof(detail), "Session %u", session_id);
+    }
+    draw_centered_status_text(pixels, 82, detail, muted, border);
+}
+
+static void draw_gameplay_connection_notice(uint32_t *pixels,
+                                            unsigned width,
+                                            unsigned height,
+                                            const char *text)
+{
+    if (!pixels || !width || !height || width > REMOTE_PLAY_VIDEO_MAX_WIDTH ||
+        height > REMOTE_PLAY_VIDEO_MAX_HEIGHT) {
+        return;
+    }
+    uint32_t foreground = SDL_MapRGBA(pixel_format, 255, 255, 255, 255);
+    uint32_t border = SDL_MapRGBA(pixel_format, 0, 0, 0, 255);
+    size_t text_width = strlen(text) * GLYPH_WIDTH;
+    signed x = text_width < width? (signed)(width - text_width) / 2 : 1;
+    signed y = height > 20? (signed)height - 20 : 1;
+
+    /* The gameplay frame may be 160 or 256 pixels wide, unlike the fixed status frame. */
+    draw_frame_text(pixels, width, height, x - 1, y, text, border);
+    draw_frame_text(pixels, width, height, x + 1, y, text, border);
+    draw_frame_text(pixels, width, height, x, y - 1, text, border);
+    draw_frame_text(pixels, width, height, x, y + 1, text, border);
+    draw_frame_text(pixels, width, height, x, y, text, foreground);
 }
 
 static RemoteFrameTelemetry frame_telemetry_from_chunk(const RemotePlayVideoChunk *chunk,
@@ -974,7 +1168,8 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
                                    uint32_t session_id,
                                    RemoteVideoReceiver *video,
                                    RemoteAudioReceiver *audio,
-                                   RemoteClockSync *clock_sync)
+                                   RemoteClockSync *clock_sync,
+                                   RemoteClientHandshake *handshake)
 {
     uint8_t encoded[REMOTE_PLAY_VIDEO_PACKET_MAX_SIZE];
     char error[128];
@@ -993,6 +1188,31 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             return;
         }
         uint64_t receive_timestamp_us = monotonic_time_us();
+
+        RemotePlayHandshakeResponse response;
+        if (remote_play_decode_handshake_response(&response, encoded, size) &&
+            response.session_id == session_id &&
+            response.request_id == handshake->request_id) {
+            handshake->host_protocol_version = response.protocol_version;
+            handshake->host_id = response.host_id;
+            handshake->last_response_timestamp_us = receive_timestamp_us;
+            if (response.status == REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH) {
+                set_connection_status(handshake, REMOTE_CLIENT_SESSION_MISMATCH);
+            }
+            else if (response.status == REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH ||
+                     response.protocol_version != REMOTE_PLAY_PROTOCOL_VERSION) {
+                set_connection_status(handshake, REMOTE_CLIENT_PROTOCOL_MISMATCH);
+            }
+            else {
+                set_connection_status(handshake, REMOTE_CLIENT_CONNECTED);
+            }
+            continue;
+        }
+
+        if (handshake->status != REMOTE_CLIENT_CONNECTED) {
+            video->packets_rejected++;
+            continue;
+        }
 
         RemotePlayClockSyncPong pong;
         if (remote_play_decode_clock_sync_pong(&pong, encoded, size) &&
@@ -1220,14 +1440,36 @@ static void update_latency_title(SDL_Window *window,
                                  const RemoteClockSync *clock_sync,
                                  const RemoteLatencyStats *latency,
                                  uint64_t video_frames_dropped,
-                                 RemoteAudioReceiver *audio)
+                                 RemoteAudioReceiver *audio,
+                                 const RemoteClientHandshake *handshake,
+                                 uint32_t session_id)
 {
     char title[512];
+    if (handshake->status != REMOTE_CLIENT_CONNECTED) {
+        if (handshake->status == REMOTE_CLIENT_PROTOCOL_MISMATCH &&
+            handshake->host_protocol_version) {
+            snprintf(title,
+                     sizeof(title),
+                     "SameBoy Link P2 | %s | Client v%u / Host v%u",
+                     connection_status_text(handshake->status),
+                     REMOTE_PLAY_PROTOCOL_VERSION,
+                     handshake->host_protocol_version);
+        }
+        else {
+            snprintf(title,
+                     sizeof(title),
+                     "SameBoy Link P2 | %s | Session %u",
+                     connection_status_text(handshake->status),
+                     session_id);
+        }
+        SDL_SetWindowTitle(window, title);
+        return;
+    }
     uint32_t audio_target_ms = 0;
     uint32_t audio_queue_ms = remote_audio_buffered_ms(audio, &audio_target_ms);
     snprintf(title,
              sizeof(title),
-             "SameBoy Link P2 | RTT %.1f ms | +/-%.1f ms | Input %.1f ms | Jitter %.1f ms | VDrop %llu | AQ %u/%u ms",
+             "SameBoy Link P2 | Connected | RTT %.1f ms | +/-%.1f ms | Input %.1f ms | Jitter %.1f ms | VDrop %llu | AQ %u/%u ms",
              clock_sync->synchronized? clock_sync->smoothed_rtt_us / 1000.0 : 0.0,
              clock_sync->synchronized? clock_sync->min_rtt_us / 2000.0 : 0.0,
              latency->samples? latency->latest_total_ms : 0.0,
@@ -1243,6 +1485,7 @@ typedef struct {
     RemoteVideoReceiver *video;
     RemoteAudioReceiver *audio;
     RemoteClockSync *clock_sync;
+    RemoteClientHandshake *handshake;
     SDL_mutex *mutex;
     uint32_t session_id;
     uint32_t sequence;
@@ -1273,28 +1516,52 @@ static int remote_client_network_thread(void *userdata)
         }
 
         uint64_t now = monotonic_time_us();
-        if (!network->clock_sync->last_send_timestamp_us ||
-            now - network->clock_sync->last_send_timestamp_us >=
-                CLOCK_SYNC_INTERVAL_US) {
-            send_clock_sync(network->transport,
-                            network->session_id,
-                            network->clock_sync);
+        if (!network->handshake->last_send_timestamp_us ||
+            now - network->handshake->last_send_timestamp_us >=
+                HANDSHAKE_INTERVAL_US) {
+            send_handshake(network->transport,
+                           network->session_id,
+                           network->handshake);
         }
-        if (network->input_changed ||
-            now - network->last_input_send_timestamp_us >= INPUT_KEEPALIVE_US) {
-            send_input(network->transport,
-                       network->session_id,
-                       ++network->sequence,
-                       network->buttons,
-                       network->input_event_timestamp_us);
-            network->last_input_send_timestamp_us = now;
-            network->input_changed = false;
+        if (network->handshake->status == REMOTE_CLIENT_CONNECTING &&
+            network->handshake->first_send_timestamp_us &&
+            now >= network->handshake->first_send_timestamp_us &&
+            now - network->handshake->first_send_timestamp_us >=
+                HANDSHAKE_WAITING_AFTER_US) {
+            set_connection_status(network->handshake, REMOTE_CLIENT_WAITING);
+        }
+        if (network->handshake->status == REMOTE_CLIENT_CONNECTED &&
+            network->handshake->last_response_timestamp_us &&
+            now >= network->handshake->last_response_timestamp_us &&
+            now - network->handshake->last_response_timestamp_us >=
+                HANDSHAKE_TIMEOUT_US) {
+            set_connection_status(network->handshake, REMOTE_CLIENT_WAITING);
+        }
+        if (network->handshake->status == REMOTE_CLIENT_CONNECTED) {
+            if (!network->clock_sync->last_send_timestamp_us ||
+                now - network->clock_sync->last_send_timestamp_us >=
+                    CLOCK_SYNC_INTERVAL_US) {
+                send_clock_sync(network->transport,
+                                network->session_id,
+                                network->clock_sync);
+            }
+            if (network->input_changed ||
+                now - network->last_input_send_timestamp_us >= INPUT_KEEPALIVE_US) {
+                send_input(network->transport,
+                           network->session_id,
+                           ++network->sequence,
+                           network->buttons,
+                           network->input_event_timestamp_us);
+                network->last_input_send_timestamp_us = now;
+                network->input_changed = false;
+            }
         }
         receive_remote_packets(network->transport,
                                network->session_id,
                                network->video,
                                network->audio,
-                               network->clock_sync);
+                               network->clock_sync,
+                               network->handshake);
         SDL_UnlockMutex(network->mutex);
         SDL_Delay(1);
     }
@@ -1469,16 +1736,24 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     RemoteVideoReceiver video = {0};
     RemoteAudioReceiver audio = {0};
     RemoteClockSync clock_sync = {0};
+    RemoteClientHandshake handshake = {
+        .status = REMOTE_CLIENT_CONNECTING,
+    };
     RemoteLatencyStats latency = {0};
+    set_connection_status(&handshake, REMOTE_CLIENT_CONNECTING);
     open_audio_device(&audio, 48000);
+    build_connection_status_frame((uint32_t *)presented_frame,
+                                  handshake.status,
+                                  session_id,
+                                  handshake.host_protocol_version);
     if (client_gl_context) {
         uint64_t initial_upload_begin = 0;
         uint64_t initial_upload_end = 0;
         uint64_t initial_present_begin = 0;
         uint64_t initial_present_end = 0;
         render_client_gl(client_window,
-                         false,
-                         NULL,
+                         true,
+                         presented_frame,
                          160,
                          144,
                          &initial_upload_begin,
@@ -1487,9 +1762,10 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                          &initial_present_end);
     }
     else {
+        SDL_UpdateTexture(texture, NULL, presented_frame, 160 * 4);
         render_client_sdl(client_window,
                           client_renderer,
-                          video_texture);
+                          texture);
     }
 
     SDL_mutex *network_mutex = SDL_CreateMutex();
@@ -1498,6 +1774,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
         .video = &video,
         .audio = &audio,
         .clock_sync = &clock_sync,
+        .handshake = &handshake,
         .mutex = network_mutex,
         .session_id = session_id,
         .buttons = buttons,
@@ -1535,6 +1812,10 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
         return 1;
     }
 
+    RemoteClientConnectionStatus displayed_status = REMOTE_CLIENT_CONNECTING;
+    bool connection_needs_new_frame = true;
+    uint64_t connection_notice_until_us = 0;
+    const char *connection_notice_text = NULL;
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -1702,8 +1983,39 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
         RemoteClockSync frame_clock_sync = {0};
         uint64_t upload_begin_time = 0;
         uint64_t upload_end_time = 0;
+        bool connection_notice_frame_updated = false;
         SDL_LockMutex(network_mutex);
-        if (video.frame_ready) {
+        RemoteClientHandshake display_handshake = handshake;
+        if (display_handshake.status != displayed_status) {
+            RemoteClientConnectionStatus previous_status = displayed_status;
+            displayed_status = display_handshake.status;
+            if (displayed_status == REMOTE_CLIENT_CONNECTED) {
+                connection_notice_text = "Player 1 connected";
+                connection_notice_until_us = monotonic_time_us() +
+                                             CONNECTION_NOTICE_DURATION_US;
+                connection_needs_new_frame = true;
+                fprintf(stderr,
+                        "[SameBoy Link][frontend] remote_client_notice text=player_1_connected duration_ms=%u\n",
+                        CONNECTION_NOTICE_DURATION_US / 1000);
+            }
+            else if (previous_status == REMOTE_CLIENT_CONNECTED &&
+                     video_available) {
+                connection_notice_text = "Player 1 disconnected";
+                connection_notice_until_us = monotonic_time_us() +
+                                             CONNECTION_NOTICE_DURATION_US;
+                connection_needs_new_frame = false;
+                connection_notice_frame_updated = true;
+                fprintf(stderr,
+                        "[SameBoy Link][frontend] remote_client_notice text=player_1_disconnected duration_ms=%u\n",
+                        CONNECTION_NOTICE_DURATION_US / 1000);
+            }
+            else {
+                connection_needs_new_frame = true;
+            }
+            render_needed = true;
+        }
+        if (video.frame_ready &&
+            display_handshake.status == REMOTE_CLIENT_CONNECTED) {
             bool first_video_frame = !video_available;
             if (texture_width != video.completed_width ||
                 texture_height != video.completed_height) {
@@ -1735,28 +2047,73 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
             frame_clock_sync = clock_sync;
             presenting_new_frame = true;
             video_available = true;
+            connection_needs_new_frame = false;
             video.frame_ready = false;
             render_needed = true;
         }
         SDL_UnlockMutex(network_mutex);
+        uint64_t notice_time_us = monotonic_time_us();
+        if ((presenting_new_frame || connection_notice_frame_updated) &&
+            connection_notice_text &&
+            notice_time_us < connection_notice_until_us) {
+            draw_gameplay_connection_notice((uint32_t *)presented_frame,
+                                            texture_width,
+                                            texture_height,
+                                            connection_notice_text);
+        }
+        if (displayed_status != REMOTE_CLIENT_CONNECTED &&
+            connection_notice_until_us &&
+            notice_time_us >= connection_notice_until_us) {
+            connection_notice_until_us = 0;
+            connection_needs_new_frame = true;
+            render_needed = true;
+        }
         if (render_needed) {
             uint64_t present_begin_time = 0;
             uint64_t present_end_time = 0;
             if (client_gl_context) {
-                render_client_gl(client_window,
-                                 video_available,
-                                 (presenting_new_frame || reupload_video_frame)?
-                                 presented_frame : NULL,
-                                 texture_width? texture_width : 160,
-                                 texture_height? texture_height : 144,
-                                 &upload_begin_time,
-                                 &upload_end_time,
-                                 &present_begin_time,
-                                 &present_end_time);
+                if (connection_needs_new_frame) {
+                    build_connection_status_frame((uint32_t *)presented_frame,
+                                                  display_handshake.status,
+                                                  session_id,
+                                                  display_handshake.host_protocol_version);
+                    render_client_gl(client_window,
+                                     true,
+                                     presented_frame,
+                                     160,
+                                     144,
+                                     &upload_begin_time,
+                                     &upload_end_time,
+                                     &present_begin_time,
+                                     &present_end_time);
+                }
+                else {
+                    render_client_gl(client_window,
+                                     video_available,
+                                     (presenting_new_frame || reupload_video_frame ||
+                                      connection_notice_frame_updated)?
+                                     presented_frame : NULL,
+                                     texture_width? texture_width : 160,
+                                     texture_height? texture_height : 144,
+                                     &upload_begin_time,
+                                     &upload_end_time,
+                                     &present_begin_time,
+                                     &present_end_time);
+                }
                 reupload_video_frame = false;
             }
             else {
-                if (presenting_new_frame && video_texture) {
+                SDL_Texture *display_texture = video_texture;
+                if (connection_needs_new_frame) {
+                    build_connection_status_frame((uint32_t *)presented_frame,
+                                                  display_handshake.status,
+                                                  session_id,
+                                                  display_handshake.host_protocol_version);
+                    SDL_UpdateTexture(texture, NULL, presented_frame, 160 * 4);
+                    display_texture = texture;
+                }
+                else if ((presenting_new_frame || connection_notice_frame_updated) &&
+                         video_texture) {
                     upload_begin_time = monotonic_time_us();
                     SDL_UpdateTexture(video_texture,
                                       NULL,
@@ -1767,7 +2124,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 present_begin_time = monotonic_time_us();
                 render_client_sdl(client_window,
                                   client_renderer,
-                                  video_texture);
+                                  display_texture);
                 present_end_time = monotonic_time_us();
             }
             if (presenting_new_frame) {
@@ -1796,12 +2153,15 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
             SDL_LockMutex(network_mutex);
             RemoteClockSync title_clock_sync = clock_sync;
             uint64_t title_video_drops = video.frames_dropped;
+            RemoteClientHandshake title_handshake = handshake;
             SDL_UnlockMutex(network_mutex);
             update_latency_title(client_window,
                                  &title_clock_sync,
                                  &latency,
                                  title_video_drops,
-                                 &audio);
+                                 &audio,
+                                 &title_handshake,
+                                 session_id);
             last_title_update_time = now;
         }
         SDL_Delay(1);

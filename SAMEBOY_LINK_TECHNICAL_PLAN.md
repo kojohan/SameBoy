@@ -4,9 +4,9 @@ This document translates the product roadmap into concrete implementation work a
 
 ## Current implementation status — 2026-08-19
 
-T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. Explicit `GameSession` modes now route CLI and menu entry points through controlled lifecycle transitions. The normal `Link` menu starts Local Link or direct-IP Remote Host/Join sessions, persistent P1/P2 mappings support two controllers with hotplug, and Remote Client has an Escape menu for local presentation, audio and P2 control settings. The protocol-v5 prototype runs both linked cores on the host, transports full-state Player 2 input over UDP, streams lossless native framebuffers in reduced-count datagram bursts and sends adaptive-jitter-buffered 48 kHz stereo PCM from Player 2. Local, LAN and direct public-IPv4 tests have passed with Tetris and Tetris DX.
+T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. Explicit `GameSession` modes now route CLI and menu entry points through controlled lifecycle transitions. The normal `Link` menu starts Local Link or direct-IP Remote Host/Join sessions, persistent P1/P2 mappings support two controllers with hotplug, and Remote Client has an Escape menu for local presentation, audio and P2 control settings. Protocol v6 adds an explicit pre-media status/compatibility handshake to protocol v5's host-owned linked cores, full-state Player 2 UDP input, reduced-burst lossless native framebuffers and adaptive-jitter-buffered 48 kHz stereo PCM. Local, LAN and direct public-IPv4 v5 tests have passed with Tetris and Tetris DX; v6 loopback and mismatch regressions pass, with physical verification pending.
 
-Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full Remote Client shader/filter reuse is complete. The zero-queue protocol-v5 datagram reduction is the accepted Wi-Fi baseline; adaptive-PCM tuning precedes any deeper video scheduler/codec work. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
+Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full Remote Client shader/filter reuse, pre-frame connection status and symmetric per-player connected/disconnected notices are complete. Protocol v6 preserves the zero-queue protocol-v5 datagram baseline; authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
 
 ## Core architectural decisions
 
@@ -250,6 +250,6 @@ Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping on
 ## Next coding tasks
 
 1. Complete the remaining fixed-role baselines using the physically verified schema-v4 RTT/jitter/video-network/total-latency windows.
-2. Preserve the current PCM target/hysteresis and protocol-v5 sender unless repeated audible or visible evidence shows a measurable need.
-3. Authenticate and encrypt protocol-v5 sessions.
+2. Physically verify protocol v6 while preserving the current protocol-v5 PCM target/hysteresis and sender behavior unless repeated audible or visible evidence shows a measurable need.
+3. Extend the v6 bootstrap into authenticated and encrypted sessions.
 4. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

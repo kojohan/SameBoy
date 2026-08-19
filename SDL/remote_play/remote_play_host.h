@@ -29,6 +29,9 @@ typedef struct {
     uint64_t stale_packets;
     uint64_t clock_sync_pings;
     uint64_t clock_sync_pongs;
+    uint64_t handshake_requests;
+    uint64_t handshake_responses;
+    uint64_t host_id;
     uint64_t last_video_sequence;
     uint64_t video_stream_sequence;
     uint64_t video_frames_sent;
@@ -57,10 +60,15 @@ typedef struct {
     uint8_t audio_queue_head;
     uint8_t audio_queue_count;
     uint8_t audio_codec;
+    RemotePlayHandshakeStatus last_handshake_status;
     uint16_t port;
     bool active;
     bool has_sequence;
+    bool has_handshake_status;
+    bool handshake_complete;
     bool client_connected;
+    bool client_connected_notice_pending;
+    bool client_disconnected_notice_pending;
 } RemotePlayHost;
 
 bool remote_play_host_start(RemotePlayHost *host,
@@ -70,6 +78,8 @@ bool remote_play_host_start(RemotePlayHost *host,
                             char *error,
                             size_t error_size);
 void remote_play_host_poll(RemotePlayHost *host);
+bool remote_play_host_take_client_connected_notice(RemotePlayHost *host);
+bool remote_play_host_take_client_disconnected_notice(RemotePlayHost *host);
 void remote_play_host_send_completed_frame(RemotePlayHost *host,
                                            const GameSessionFrame *frame,
                                            const SDL_PixelFormat *format);
