@@ -649,10 +649,112 @@ recovered and remained stable. Video superseded-before-present remained nearly
 identical at 192/5,873 frames (3.27%), pointing to sender/presentation pacing
 rather than network direction alone.
 
+The first paired-log summarizer is now implemented and validated against that
+Ethernet Host/Wi-Fi Client capture. It reproduced the 98.350-second active
+duration, 12 audio and eight video losses, two underflows, 192 superseded
+frames and 36.527/167.422 ms average/maximum latency. From 164 detailed latency
+samples it additionally calculated p95 49.530 ms and p99 112.700 ms, and placed
+all media-loss events in the 20-30 second window. JSON and Markdown output are
+schema-versioned and include build-hash comparison plus shutdown-tail handling.
+
+The Windows diagnostic launcher automatically exports to the shared
+`SAME-LINKTEST\LOGS` root when launched from a published NAS build. Every start
+uses a collision-resistant timestamp/computer/launch ID and is named after exit
+with the detected `host`, `client`, `local` or `idle` role. Active stdout/stderr
+now remains below the local `%LOCALAPPDATA%` staging root so synchronous SMB
+writes cannot perturb realtime traffic. After exit the complete directory is
+copied to a hidden NAS staging name, SHA-256 verified file by file and renamed
+to its final shared name; a failed export retains the local capture. Launcher
+metadata also records the primary adapter, Wi-Fi/Ethernet medium, link speed,
+IPv4 address and optional test label. Isolated fixture runs verified Host,
+re-launched Client and idle classification plus multiple unique launches in one
+shared directory, removing the previous manual log-copy step.
+
+The first UNC client launch exposed two launcher defects: PowerShell's internal
+provider-qualified UNC path was passed to the native client's diagnostic
+redirect, and the menu process could finish before its relaunched Remote Client
+child. The launcher now uses the native UNC provider path, detects the child PID
+and waits for it before combining or renaming logs. A process-chain fixture
+verified that the child remained logged through exit and was classified as
+`client`.
+
 These comparisons also swapped physical machine roles, so Ethernet/Wi-Fi and
 CPU effects are not fully isolated. The complete evidence, test limitations,
 repeat matrix and P0–P5 optimization gates are maintained in
-`REMOTE_PLAY_PERFORMANCE_PLAN.md`. The immediate engineering order is richer
-machine-readable telemetry, priority scheduling for input/audio, paced video
-chunks, repeated physical baselines, adaptive-PCM tuning and timestamp-driven
-client presentation pacing before codec expansion.
+`REMOTE_PLAY_PERFORMANCE_PLAN.md`. That initial evidence led to the protocol-v5
+datagram reduction and zero-queue presentation work recorded below. With the
+new Wi-Fi baseline accepted, the immediate engineering order is audio arrival
+telemetry, correct active-adapter metadata and adaptive-PCM tuning; deeper
+transport pacing is deferred until measurements show a need.
+
+### Zero-queue adaptive presentation experiment
+
+The 60 FPS platform side-scroll test exposed small client hitches even though
+the Wi-Fi/Wi-Fi capture completed 7,949 frames with zero network drops or
+rejections. The client superseded 324 complete frames before presentation
+(4.08%), so the visible issue is presentation cadence rather than missing UDP
+frames.
+
+Remote Client now keeps the existing one-frame latest-complete mailbox and does
+not add buffering on either machine. Its OpenGL path requests adaptive VSync;
+late frames may present immediately instead of waiting for another refresh. If
+the driver does not support adaptive VSync, the client falls back to VSync off
+rather than adding a blocking standard-VSync delay. Startup diagnostics record
+the effective VSync mode and swap interval.
+
+Shutdown diagnostics now distinguish completed and actually presented frames
+and report average/maximum presentation-call duration plus the number of calls
+lasting at least 18 ms. The paired-log summarizer includes these values in
+schema version 2 while remaining compatible with older logs. A warnings-as-
+errors Windows build and all four automated smoke modes passed. At this
+checkpoint, the physical 60 Hz side-scroll A/B test still remained before an
+acceptance decision.
+
+### Protocol v5 reduced video datagram burst experiment
+
+The first physical zero-queue presentation retest felt unchanged. Adaptive
+VSync was unavailable on the client and correctly selected `off-fallback`.
+Presentation itself was not blocking: 6,796 of 6,864 completed frames were
+presented, calls averaged 0.092 ms, the maximum was 0.432 ms and no call crossed
+18 ms. Superseded frames improved from 4.08% to 0.99%, but the unchanged feel
+shows that counter alone does not explain the side-scroll hitch.
+
+The same Wi-Fi/Wi-Fi run exposed stronger transport evidence. The host sent
+135,127 video chunks for 6,896 frames, averaging 19.60 back-to-back datagrams
+per frame. The client had a 77.086 ms maximum audio arrival gap and four
+underflows, including three in the 70–80 second window, despite zero missing
+audio or video packets. The launcher selected a disconnected Ethernet adapter
+for host metadata (`0 bps`); the physical host connection was Wi-Fi, so adapter
+selection remains a separate metadata fix.
+
+Protocol v5 raises video payload from 1,024 to 1,280 bytes. The resulting
+1,388-byte UDP payload including the SameBoy Link header remains below a
+1,500-byte link MTU after IPv4 or IPv6 overhead. A typical RLE frame should need
+about 16 rather than 20 datagrams, reducing packet count by roughly 20% without
+adding a host/client frame queue or spreading transmission over a frame period.
+Host logs now report average/maximum burst duration, bursts lasting at least
+5 ms and maximum chunks per frame. Client logs report average/maximum complete-
+frame receive span and spans lasting at least 5 ms. At this checkpoint, the next
+identical physical side-scroll run was designated as the acceptance test.
+
+Three physical Wi-Fi/Wi-Fi protocol-v5 runs established the reduced-datagram
+path as the current baseline. Normal RLE traffic remained near 15.7–16.1
+datagrams per frame instead of protocol v4's 19.6. The three superseded rates
+were 0.84%, 0.71% and 0.92%; average input-to-present latency was 37.855,
+34.487 and 36.670 ms. The user reported that Wi-Fi play now feels good enough
+to retain this implementation while deeper transport work is deferred.
+
+The final repetition captured a rare horizontal seam in the host's P1-only
+window while the Remote Client remained intact. This was not a UDP fault: both
+streams had zero video drops, and the host's maximum measured send burst was
+0.943 ms. P1-only link presentation returned slot 0's active pixel buffer,
+which the core may already be drawing for the next frame; side-by-side and the
+remote P2 stream instead used latched complete buffers. Local Link and Remote
+Host P1-only presentation now select slot 0's immutable previous buffer after
+the first completed frame. This changes only the local host display and adds no
+queue or network/input latency.
+
+After the P1 presentation correction, the warnings-as-errors Windows build and
+all four automated smoke modes (single-player, Local Link, Remote OpenGL and
+Remote SDL) passed. The corrected build was also published to the shared
+`SAME-LINKTEST` build directory for physical verification.

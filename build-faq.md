@@ -105,8 +105,8 @@ If the SMB share grants Windows execute access, both computers can launch the
 same `sameboy.exe` directly from that versioned directory. Otherwise run the
 included `run-shared-windows-build.ps1`; it verifies the same manifest, copies
 the immutable build to a per-user Local AppData cache and starts it locally.
-ROMs, battery saves and diagnostic logs should not be stored in the shared
-runtime directory.
+ROMs and battery saves should not be stored in the shared runtime directory.
+The diagnostic launcher stores logs in the separate shared `LOGS` directory.
 
 The current development NAS is available as `M:` on the build PC and the test
 root is `M:\SAME-LINKTEST`, or `\\KONAS\sdc\SAME-LINKTEST` over UNC.
@@ -276,8 +276,52 @@ The client connects to the router's public IPv4 address and forwarded port:
 For a menu-driven test with a persistent diagnostic log, double-click
 `start-sameboy-with-log.cmd` beside `sameboy.exe`. Start Host or Join from the
 Link menu as usual, then exit SameBoy normally when the test is finished. The
-launcher prints the path to a combined `sameboy-session.log` below
-`Documents\SameBoy-Link-Logs`; send that file when reporting the test result.
+launcher automatically finds the enclosing `SAME-LINKTEST` directory and
+exports every completed launch below `M:\SAME-LINKTEST\LOGS`. While SameBoy is
+running, all stdout/stderr and client diagnostics stay on the local disk below
+`%LOCALAPPDATA%\SameBoy Link\LogStaging`; no realtime log write goes to the NAS.
+After SameBoy exits, the complete folder is copied to a hidden staging name on
+the share, SHA-256 verified file by file and atomically renamed to its final
+unique name. The folder name records timestamp, computer, role and launch ID,
+for example
+`20260819-120000-HOSTPC-host-a1b2c3d4`. Host, Client, Local Link and an unused
+menu launch are classified as `host`, `client`, `local` and `idle`.
+
+Mapped-drive and UNC launches are both supported. When Join relaunches SameBoy
+as the dedicated Remote Client process, the logging launcher detects that child
+PID and remains open until the client exits. It does not rename or combine the
+folder while the client is still writing diagnostics. If the NAS export fails,
+the launcher prints the retained local log path and returns an error instead of
+discarding the capture.
+
+`session-info.txt` records the detected role, active network interface,
+Wi-Fi/Ethernet medium, link speed, local IPv4, build hash and an optional test
+label. To add a label when starting from a terminal, use:
+
+```powershell
+.\start-sameboy-with-log.cmd -TestLabel "both-ethernet-run1"
+```
+
+Set `SAMEBOY_LINK_LOG_ROOT` or pass `-LogRoot` to override the destination. If
+the launcher is not below `SAME-LINKTEST` and `M:\SAME-LINKTEST` is unavailable,
+it falls back to `Documents\SameBoy-Link-Logs`. The final combined file path is
+printed when SameBoy closes.
+
+To compare a completed Host and Remote Client capture automatically, keep their
+log directories separate and run this command from the source tree:
+
+```powershell
+.\summarize-windows-link-logs.ps1 `
+  -HostPath "M:\SAME-LINKTEST\LOGS\20260819-120000-HOSTPC-host-a1b2c3d4" `
+  -ClientPath "M:\SAME-LINKTEST\LOGS\20260819-120005-CLIENTPC-client-e5f6a7b8" `
+  -TestLabel "lan-ethernet-host-wifi-client"
+```
+
+The paths may instead point directly to each `sameboy-session.log`. By default,
+the script creates a timestamped JSON and Markdown pair under
+`build\regression\summaries`. The report checks build hashes, accounts for the
+normal shutdown tail, computes normalized loss/underflow rates and extracts
+latency percentiles and ten-second event windows from detailed timing records.
 
 Run the client from a genuinely different Internet connection. A client on the
 same LAN may fail when using the public address if the router lacks NAT loopback;
@@ -293,6 +337,6 @@ or make permanent port forwarding safe.
 Later instrumented physical runs include a longer direct-IPv4 host capture and
 opposite-direction LAN tests with Wi-Fi on the Host and Client respectively.
 Use `REMOTE_PLAY_PERFORMANCE_PLAN.md` for the exact counters, interpretation,
-test limitations and the current optimization gates. In particular, keep Host
-and Client log directories separate when copying them from
-`Documents\SameBoy-Link-Logs` so identically named files are not overwritten.
+test limitations and the current optimization gates. The logging launcher now
+keeps Host and Client launches separate automatically in the shared `LOGS`
+directory, so no post-test file move or rename is needed.

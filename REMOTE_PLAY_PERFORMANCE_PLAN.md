@@ -10,8 +10,11 @@ in `TODO.md`.
 - Use the same checksummed build on both PCs.
 - Start both roles with `start-sameboy-with-log.cmd` and exit normally so final
   counters are flushed.
-- Store complete host and client folders separately; do not rename only the
-  combined file and overwrite raw logs.
+- Keep active diagnostic writes on local storage. The launcher exports and
+  verifies the completed directory to the shared `LOGS` root only after exit,
+  so SMB latency cannot perturb the realtime measurement.
+- Let the launcher keep each start in its own uniquely named Host/Client folder
+  below the shared `LOGS` directory; do not move or rename individual files.
 - Record which physical PC is Host/Client and whether each path is Ethernet,
   Wi-Fi or Internet.
 - Derive active media duration from received media counters rather than total
@@ -24,10 +27,26 @@ in `TODO.md`.
   below also swapped the desktop and laptop roles, so network medium and
   machine performance are partially confounded.
 
-All tests below used protocol v4, PCM S16LE stereo at 48 kHz, lossless pixel RLE
-video, session ID 1 and development source commit `1ac9ddab8a17`. The tested
-source tree was dirty and is evidence for development decisions, not a release
-qualification.
+Summarize a completed host/client pair with:
+
+```powershell
+.\summarize-windows-link-logs.ps1 `
+  -HostPath "M:\SAME-LINKTEST\LOGS\20260819-120000-HOSTPC-host-a1b2c3d4" `
+  -ClientPath "M:\SAME-LINKTEST\LOGS\20260819-120005-CLIENTPC-client-e5f6a7b8" `
+  -TestLabel "lan-ethernet-host-wifi-client"
+```
+
+Each path may name a complete launcher log directory or its combined
+`sameboy-session.log`. The script writes schema-versioned JSON plus a readable
+Markdown report below the ignored `build\regression\summaries` directory by
+default. It normalizes media rates, estimates the expected disconnect tail and
+groups detailed timing/loss events into ten-second windows.
+
+Tests A-C used protocol v4, PCM S16LE stereo at 48 kHz, lossless pixel RLE,
+session ID 1 and development source commit `1ac9ddab8a17`. Test D used the same
+audio/video formats with protocol v5 and development commit `15e77b3e10bf`.
+Both tested source trees were dirty and are evidence for development decisions,
+not release qualification.
 
 ## Test A — direct public IPv4
 
@@ -51,7 +70,7 @@ the first logging launcher did not retain stderr when Join relaunched the
 Remote Client process. The launcher now gives that child explicit stdout/stderr
 files, and a self-test confirms that client diagnostics reach the combined log.
 
-This remains a development proof only. Protocol v4 has no authentication or
+This remains a development proof only. Protocol v5 has no authentication or
 encryption, and manual forwarding must not be treated as a public feature.
 
 ## Test B — Wi-Fi host, Ethernet client
@@ -109,34 +128,62 @@ pure Ethernet/Wi-Fi comparison because the PCs also swapped roles: host average
 PCM encode time improved from 0.10 to 0.06 microseconds, while client average
 decode time increased from 2.83 to 6.36 microseconds on the laptop.
 
+## Test D — protocol v5 Wi-Fi/Wi-Fi side-scroll repetitions
+
+Protocol v5 increased the video payload from 1,024 to 1,280 bytes while keeping
+the latest-complete-frame policy and adding no host or client frame queue. Three
+physical Wi-Fi/Wi-Fi repetitions used a demanding 60 FPS horizontal side-scroll
+test. Normal RLE traffic fell from protocol v4's 19.60 datagrams per frame to
+15.68-16.05, approximately 19% fewer datagrams.
+
+| Client measurement | Run 1 | Run 2 | Run 3 |
+|---|---:|---:|---:|
+| Active duration | 132.207 s | 120.643 s | 76.062 s |
+| Video superseded before presentation | 0.84% | 0.71% | 0.92% |
+| Average latency | 37.855 ms | 34.487 ms | 36.670 ms |
+| p95 latency | 53.298 ms | 45.673 ms | 48.060 ms |
+| Maximum latency | 66.541 ms | 60.358 ms | 59.419 ms |
+| Average / maximum frame receive span | 2.280 / 25.726 ms | 2.153 / 18.976 ms | 2.647 / 19.024 ms |
+| Maximum audio arrival gap | 234.965 ms | 41.503 ms | 132.607 ms |
+| Audio underflows | 3 | 2 | 2 |
+| Host average / maximum video burst | 0.254 / 0.815 ms | 0.247 / 0.794 ms | 0.227 / 0.943 ms |
+
+The user accepted this as the current playable Wi-Fi baseline. Run 3 also
+captured a rare horizontal seam in the host P1-only window while the client
+image remained intact. The cause was local presentation of slot 0's active
+framebuffer while the next frame could be drawn. Local Link and Remote Host
+P1-only presentation now use the immutable previous completed framebuffer;
+this correction adds no network or input latency.
+
 ## Evidence-based conclusions
 
 1. Protocol validation and bounded queues are working: rejected/stale counts
    remained zero and neither host accumulated send drops.
-2. The lossless stream currently needs roughly 9.5–9.7 Mbit/s for video plus
-   1.536 Mbit/s for PCM before UDP/IP overhead. Sending a frame's roughly 20
-   chunks as a burst competes with 5 ms audio, input and clock packets.
+2. Protocol v4 lossless video needed roughly 9.5-9.7 Mbit/s plus 1.536 Mbit/s
+   PCM before UDP/IP overhead. Protocol v5 reduces the normal datagram count
+   from roughly 20 to 16 per frame without increasing buffering.
 3. A wired host is the preferred current setup. It greatly improved continuous
    audio delivery, although Wi-Fi can still produce an isolated 80–140 ms burst.
 4. A larger fixed audio buffer alone is not the right first fix. Test B reached
    its 100 ms target and still underflowed, while Test C alternated between
    trimming bursts and later consuming the queue.
-5. Video superseded-before-present stayed essentially constant (3.25% versus
-   3.27%) across opposite network directions. Presentation/send pacing, rather
-   than packet loss alone, is the likely cause.
-6. The 36–42 ms normal average input-to-present latency is usable, but isolated
-   bursts can exceed 160 ms. Optimization must preserve low normal latency while
-   preventing media bursts from delaying input and audio.
+5. Protocol v4 superseded-before-present stayed essentially constant (3.25%
+   versus 3.27%) across opposite network directions. Protocol v5 repetitions
+   reduced this to 0.71-0.92%, although the first VSync-only experiment felt
+   unchanged; that counter is evidence, not a complete smoothness measure.
+6. Protocol v5 averaged 34.5-37.9 ms input-to-present latency with p95 below
+   54 ms in all three repetitions. Audio arrival gaps and underflows remain the
+   clearest next optimization target.
 
 ## Optimization plan
 
 ### P0 — reproducible performance gate and richer telemetry
 
-1. Add `summarize-windows-link-logs.ps1` to produce one JSON/Markdown summary
-   from a host/client log pair, including normalized rates and shutdown-tail
-   handling.
-2. Record machine role, network medium, adapter/link speed, build hash and test
-   label in launcher metadata.
+1. Extend the implemented `summarize-windows-link-logs.ps1` JSON/Markdown
+   summary as new telemetry is added. Its first version already handles
+   normalized rates, latency percentiles, event windows and the shutdown tail.
+2. Keep the implemented launcher metadata and unique shared-log naming aligned
+   with the summarizer as roles and network diagnostics expand.
 3. Add p50/p95/p99/max audio inter-arrival gap, RTT, jitter, video network time,
    queue age and input-to-present latency. Report metrics in fixed time windows
    so a single burst can be located automatically.
@@ -160,6 +207,13 @@ reading the full logs.
    sender queue age.
 5. Instrument queue age, scheduling delay and datagrams per burst for each
    packet class.
+
+The accepted zero-buffer experiment raises video payload from 1,024 to 1,280
+bytes. The SameBoy Link UDP payload is then 1,388 bytes, or 1,416/1,436 bytes
+after UDP plus IPv4/IPv6 headers, and remains below a 1,500-byte MTU. Physical
+tests reduced the normal RLE frame from about 20 to about 16 datagrams without
+delaying frame completion. Host burst duration and client receive-span
+telemetry provide the continuing evidence.
 
 Initial gate: on both-Ethernet five-minute runs, zero post-start audio
 underflows, zero media sequence gaps, p99 audio arrival gap below 30 ms and
@@ -186,19 +240,27 @@ trim/underflow cycle.
 
 ### P3 — pace client video presentation
 
-1. Present using host frame timestamps and a small bounded latest-frame queue,
-   rather than allowing multiple completed frames to be replaced before the UI
-   can present one.
-2. Measure completed-to-present queue age and distinguish deliberate pacing
-   skips from incomplete-frame network drops.
-3. Keep the newest-frame low-latency policy during genuine congestion; never
-   accumulate an unbounded frame queue.
-4. Test OpenGL VSync modes and the SDL fallback against the same presented-frame
-   counters.
+1. Keep the existing single latest-complete-frame mailbox: do not add a host or
+   client frame queue that permanently increases input latency.
+2. Test adaptive OpenGL VSync first. It synchronizes on-time frames but permits
+   a late frame to present immediately instead of waiting through another full
+   refresh; fall back to unbuffered VSync-off presentation when unsupported.
+3. Measure frames actually presented, completed frames superseded before
+   presentation, presentation-call duration and calls exceeding 18 ms.
+4. Use host timestamps to diagnose cadence mismatch, but keep newest-frame-wins
+   behavior during congestion and never accumulate delayed frames.
+5. Compare adaptive OpenGL and the SDL fallback against the same physical 60 Hz
+   side-scroll test before considering any deeper scheduler change.
 
-Gate: superseded/pacing-skipped frames below 0.5% on stable LAN, zero incomplete
-frames on wired LAN, average input-to-present latency at or below 40 ms and no
-latency growth over ten minutes.
+The physical client did not support adaptive VSync and selected the intended
+`off-fallback` mode. Presentation calls averaged 0.092 ms, peaked at 0.432 ms
+and never crossed 18 ms, so blocking buffer swaps were not the observed hitch's
+root cause. The zero-queue policy remains the accepted baseline.
+
+Gate: superseded frames below 0.5% on stable LAN, zero incomplete frames on
+wired LAN, average input-to-present latency at or below 40 ms and no latency
+growth over ten minutes. Any smoother mode must not add a permanent frame of
+latency.
 
 ### P4 — reduce bandwidth after pacing is correct
 
@@ -224,10 +286,9 @@ public-facing Internet release.
 
 ## Recommended implementation order
 
-1. Log summarizer and percentile/window telemetry.
-2. Priority sender scheduler plus video-chunk pacing.
-3. Repeat the physical baseline matrix.
-4. Tune adaptive PCM from the new buffer/inter-arrival evidence.
-5. Add timestamp-driven client presentation pacing.
-6. Benchmark lower-bandwidth lossless/delta transport.
-7. Run controlled impairment and longer Internet regressions.
+1. Add audio inter-arrival percentile/window telemetry and correct active-adapter metadata selection.
+2. Tune adaptive PCM startup, target hysteresis, physical capacity and drift from the new evidence.
+3. Complete longer fixed-role Ethernet/Wi-Fi baseline repetitions.
+4. Revisit priority scheduling or chunk pacing only if the accepted protocol-v5 baseline shows a measurable need.
+5. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
+6. Run controlled impairment and longer Internet regressions.

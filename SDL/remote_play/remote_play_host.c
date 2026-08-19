@@ -475,12 +475,23 @@ void remote_play_host_send_completed_frame(RemotePlayHost *host,
         host->video_chunks_sent++;
     }
 
+    uint64_t burst_time_us = monotonic_time_us() - send_time;
     host->video_frames_sent++;
     host->video_raw_bytes += raw_frame_size;
     host->video_encoded_bytes += encoded_frame_size;
+    host->video_burst_time_us += burst_time_us;
+    if (burst_time_us > host->video_maximum_burst_us) {
+        host->video_maximum_burst_us = burst_time_us;
+    }
+    if (burst_time_us >= 5000) {
+        host->video_slow_bursts++;
+    }
+    if (chunk_count > host->video_maximum_chunks_per_frame) {
+        host->video_maximum_chunks_per_frame = chunk_count;
+    }
     if (host->video_frames_sent == 1) {
         sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
-                         "remote_video_host first_stream_frame=%llu source_frame=%llu size=%ux%u raw_bytes=%u encoded_bytes=%u chunks=%u format=%s",
+                         "remote_video_host first_stream_frame=%llu source_frame=%llu size=%ux%u raw_bytes=%u encoded_bytes=%u chunks=%u burst_us=%llu format=%s",
                          (unsigned long long)stream_sequence,
                          (unsigned long long)frame->sequence,
                          frame->width,
@@ -488,16 +499,21 @@ void remote_play_host_send_completed_frame(RemotePlayHost *host,
                          raw_frame_size,
                          encoded_frame_size,
                          chunk_count,
+                         (unsigned long long)burst_time_us,
                          pixel_format == REMOTE_PLAY_VIDEO_FORMAT_RLE_RGBA8? "RLE_RGBA8" : "RGBA8");
     }
     else if (host->video_frames_sent % 600 == 0) {
         sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
-                         "remote_video_host frames=%llu dropped=%llu chunks=%llu encoded_ratio=%.3f",
+                         "remote_video_host frames=%llu dropped=%llu chunks=%llu encoded_ratio=%.3f average_burst_us=%.1f maximum_burst_us=%llu slow_bursts=%llu maximum_chunks_per_frame=%u",
                          (unsigned long long)host->video_frames_sent,
                          (unsigned long long)host->video_frames_dropped,
                          (unsigned long long)host->video_chunks_sent,
                          host->video_raw_bytes?
-                             (double)host->video_encoded_bytes / host->video_raw_bytes : 0.0);
+                             (double)host->video_encoded_bytes / host->video_raw_bytes : 0.0,
+                         (double)host->video_burst_time_us / host->video_frames_sent,
+                         (unsigned long long)host->video_maximum_burst_us,
+                         (unsigned long long)host->video_slow_bursts,
+                         host->video_maximum_chunks_per_frame);
     }
 }
 
@@ -518,14 +534,19 @@ void remote_play_host_stop(RemotePlayHost *host)
                      (unsigned long long)host->last_input_gap_us,
                      (unsigned long long)host->max_input_gap_us);
     sameboy_link_log(SAMEBOY_LINK_LOG_VIDEO,
-                     "remote_video_host stopped frames_sent=%llu frames_dropped=%llu chunks_sent=%llu raw_bytes=%llu encoded_bytes=%llu encoded_ratio=%.3f",
+                     "remote_video_host stopped frames_sent=%llu frames_dropped=%llu chunks_sent=%llu raw_bytes=%llu encoded_bytes=%llu encoded_ratio=%.3f average_burst_us=%.1f maximum_burst_us=%llu slow_bursts=%llu maximum_chunks_per_frame=%u",
                      (unsigned long long)host->video_frames_sent,
                      (unsigned long long)host->video_frames_dropped,
                      (unsigned long long)host->video_chunks_sent,
                      (unsigned long long)host->video_raw_bytes,
                      (unsigned long long)host->video_encoded_bytes,
                      host->video_raw_bytes?
-                         (double)host->video_encoded_bytes / host->video_raw_bytes : 0.0);
+                         (double)host->video_encoded_bytes / host->video_raw_bytes : 0.0,
+                     host->video_frames_sent?
+                         (double)host->video_burst_time_us / host->video_frames_sent : 0.0,
+                     (unsigned long long)host->video_maximum_burst_us,
+                     (unsigned long long)host->video_slow_bursts,
+                     host->video_maximum_chunks_per_frame);
     sameboy_link_log(SAMEBOY_LINK_LOG_AUDIO,
                      "remote_audio_host stopped codec=%s packets_sent=%llu packets_dropped=%llu frames_sent=%llu payload_bytes=%llu average_payload_bytes=%.1f average_encode_us=%.2f payload_bitrate_kbps=%.1f",
                      host->audio_codec == REMOTE_PLAY_AUDIO_CODEC_OPUS?

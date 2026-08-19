@@ -36,6 +36,10 @@ typedef struct {
     uint64_t video_chunks_sent;
     uint64_t video_raw_bytes;
     uint64_t video_encoded_bytes;
+    uint64_t video_burst_time_us;
+    uint64_t video_maximum_burst_us;
+    uint64_t video_slow_bursts;
+    uint16_t video_maximum_chunks_per_frame;
     uint64_t audio_packets_sent;
     uint64_t audio_packets_dropped;
     uint64_t audio_frames_sent;

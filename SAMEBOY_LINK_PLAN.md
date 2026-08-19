@@ -2,11 +2,11 @@
 
 A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy Color Link Cable multiplayer.
 
-## Implementation checkpoint — 2026-08-18
+## Implementation checkpoint — 2026-08-19
 
-The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v4 provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread and latency telemetry. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
+The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v5 provides full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread, latency telemetry and reduced video datagram count. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 session.
 
-PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Opposite-direction Ethernet/Wi-Fi measurements now make priority transport scheduling, audio resilience and client video pacing the next work; see `REMOTE_PLAY_PERFORMANCE_PLAN.md` before authenticated/encrypted sessions and zero-configuration Internet connectivity.
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Protocol v5's zero-queue 1,280-byte video payload is accepted as the current Wi-Fi baseline after three physical repetitions; adaptive-PCM resilience remains the next optimization area. See `REMOTE_PLAY_PERFORMANCE_PLAN.md` before authenticated/encrypted sessions and zero-configuration Internet connectivity.
 
 ## Product direction
 

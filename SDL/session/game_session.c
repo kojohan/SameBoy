@@ -181,6 +181,12 @@ unsigned game_session_presentation_height(GameSession *session)
 uint32_t *game_session_compose_framebuffers(GameSession *session)
 {
     if (session->presentation_slot_count == 1) {
+        EmulatorSlot *slot = &session->slots[0];
+        if ((session->mode == GAME_SESSION_LOCAL_LINK ||
+             session->mode == GAME_SESSION_REMOTE_HOST) &&
+            slot->completed_frame_sequence) {
+            return slot->previous_pixel_buffer;
+        }
         return session->slots[0].active_pixel_buffer;
     }
 

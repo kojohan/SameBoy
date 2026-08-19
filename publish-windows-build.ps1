@@ -67,7 +67,7 @@ else {
 }
 
 New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null
-$resolvedDestinationRoot = (Resolve-Path -LiteralPath $DestinationRoot).Path
+$resolvedDestinationRoot = (Resolve-Path -LiteralPath $DestinationRoot).ProviderPath
 $buildsRoot = Join-Path $resolvedDestinationRoot "builds"
 New-Item -ItemType Directory -Path $buildsRoot -Force | Out-Null
 $publishDirectory = Join-Path $buildsRoot $buildId

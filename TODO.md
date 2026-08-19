@@ -76,15 +76,17 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 
 - [x] Add a double-click Windows launcher that exports complete Host and Remote Client diagnostic logs.
 - [x] Capture direct-Internet and opposite-direction Ethernet/Wi-Fi physical measurements.
-- [ ] Add a host/client log summarizer with JSON/Markdown output and shutdown-tail handling.
-- [ ] Record machine role, network medium/link speed and test label in log metadata.
+- [x] Add a host/client log summarizer with JSON/Markdown output and shutdown-tail handling.
+- [x] Record machine role, network medium/link speed and test label in log metadata.
 - [ ] Add p50/p95/p99/window telemetry for audio arrival, RTT/jitter, video network time, queue age and total latency.
-- [ ] Count frames actually presented separately from completed, superseded and deliberately skipped frames.
+- [x] Count frames actually presented separately from completed and superseded frames.
 - [ ] Run three five-minute repetitions for both-Ethernet and fixed-role Ethernet/Wi-Fi baselines.
 - [ ] Add a bounded priority sender scheduler: input/clock, then audio, then video.
+- [x] Add a zero-buffer 1,280-byte video payload experiment with host burst and client receive-span telemetry.
+- [x] Present P1-only Local Link/Remote Host from the latched complete framebuffer to prevent mixed-frame seams.
 - [ ] Pace video chunks across the frame interval and drop stale unsent video before it delays realtime traffic.
 - [ ] Tune PCM startup, adaptive target/hysteresis, physical capacity and drift correction from measured percentiles.
-- [ ] Add timestamp-driven bounded client presentation pacing.
+- [x] Evaluate zero-queue adaptive VSync on a physical 60 Hz client; retain unbuffered VSync-off fallback where unsupported.
 - [ ] Add deterministic delay/jitter/loss regression after the physical LAN gates pass.
 - [ ] Meet the quantitative P0–P4 gates in `REMOTE_PLAY_PERFORMANCE_PLAN.md`.
 

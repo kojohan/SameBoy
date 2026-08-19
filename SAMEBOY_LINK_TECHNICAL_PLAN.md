@@ -2,11 +2,11 @@
 
 This document translates the product roadmap into concrete implementation work against the current SameBoy codebase.
 
-## Current implementation status — 2026-08-18
+## Current implementation status — 2026-08-19
 
-T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. Explicit `GameSession` modes now route CLI and menu entry points through controlled lifecycle transitions. The normal `Link` menu starts Local Link or direct-IP Remote Host/Join sessions, persistent P1/P2 mappings support two controllers with hotplug, and Remote Client has an Escape menu for local presentation, audio and P2 control settings. The protocol-v4 prototype runs both linked cores on the host, transports full-state Player 2 input over UDP, streams lossless native framebuffers and sends adaptive-jitter-buffered 48 kHz stereo PCM from Player 2. Local, LAN and direct public-IPv4 tests have passed with Tetris and Tetris DX.
+T0–T8 and the first T10 audio transport are implemented in the Windows SDL frontend. Explicit `GameSession` modes now route CLI and menu entry points through controlled lifecycle transitions. The normal `Link` menu starts Local Link or direct-IP Remote Host/Join sessions, persistent P1/P2 mappings support two controllers with hotplug, and Remote Client has an Escape menu for local presentation, audio and P2 control settings. The protocol-v5 prototype runs both linked cores on the host, transports full-state Player 2 input over UDP, streams lossless native framebuffers in reduced-count datagram bursts and sends adaptive-jitter-buffered 48 kHz stereo PCM from Player 2. Local, LAN and direct public-IPv4 tests have passed with Tetris and Tetris DX.
 
-Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full Remote Client shader/filter reuse is complete; video pacing/compression follows. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
+Opus support is retained only as an experimental build option and is deferred because PCM was more stable in physical testing. The session/UI milestone described in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full Remote Client shader/filter reuse is complete. The zero-queue protocol-v5 datagram reduction is the accepted Wi-Fi baseline; adaptive-PCM tuning precedes any deeper video scheduler/codec work. Authentication, encryption, coordination, NAT traversal and relay support are still required before public Internet release.
 
 ## Core architectural decisions
 
@@ -249,9 +249,9 @@ Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping on
 
 ## Next coding tasks
 
-1. Add the host/client log summarizer and percentile/window telemetry defined in `REMOTE_PLAY_PERFORMANCE_PLAN.md`.
-2. Add a bounded sender scheduler that prioritizes input/clock and audio, then paces video chunks across the frame interval.
-3. Repeat the fixed-role physical baseline matrix and tune adaptive PCM plus timestamp-driven client presentation against its gates.
-4. Evaluate lower-bandwidth codecs only after pacing is stable and measured.
-5. Authenticate and encrypt protocol-v4 sessions.
+1. Extend the implemented host/client summarizer with audio inter-arrival percentile/window telemetry.
+2. Correct launcher adapter selection so disconnected zero-speed interfaces cannot replace the active Wi-Fi/Ethernet path.
+3. Tune adaptive PCM startup, target hysteresis, physical capacity and drift against repeated physical runs.
+4. Revisit a priority sender scheduler and lower-bandwidth codecs only when the accepted protocol-v5 baseline shows a measurable need.
+5. Authenticate and encrypt protocol-v5 sessions.
 6. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

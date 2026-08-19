@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Remote Play is playable over LAN and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v5 Remote Play is playable over Ethernet and Wi-Fi and has passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -96,12 +96,13 @@ Start here depending on what you want to know:
 The completed foundation now includes the reproducible Windows build, dual-core
 Local Link, explicit session modes, persistent independent controls, menu-driven
 Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
-settings-capable Remote Client with local SameBoy shaders/filters. The immediate
-development order is now:
+settings-capable Remote Client with local SameBoy shaders/filters. Protocol v5
+reduces lossless-video datagram count without adding a frame queue, and repeated
+Wi-Fi/Wi-Fi play is the accepted current baseline. The next optimization work is:
 
-1. add comparable log summaries and percentile/window telemetry;
-2. prioritize input/audio and pace video chunks instead of sending whole-frame bursts;
-3. tune adaptive PCM and client presentation pacing against repeated physical tests;
+1. add audio inter-arrival percentile/window telemetry and fix adapter metadata selection;
+2. tune adaptive PCM startup, target hysteresis and drift against repeated physical tests;
+3. revisit priority scheduling and lower-bandwidth video only when measurements justify it;
 4. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
 
 See [REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md),

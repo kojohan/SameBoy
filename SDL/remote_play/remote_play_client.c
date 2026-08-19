@@ -87,6 +87,9 @@ typedef struct {
     uint64_t raw_bytes_completed;
     uint64_t encoded_bytes_completed;
     uint64_t frames_superseded_before_present;
+    uint64_t receive_span_time_us;
+    uint64_t maximum_receive_span_us;
+    uint64_t slow_receive_spans;
     uint16_t assembling_width;
     uint16_t assembling_height;
     uint16_t assembling_chunk_count;
@@ -966,6 +969,16 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             }
             video->frame_ready = true;
             video->frames_completed++;
+            uint64_t receive_span_us =
+                video->completed_telemetry.client_last_receive_timestamp_us -
+                video->completed_telemetry.client_first_receive_timestamp_us;
+            video->receive_span_time_us += receive_span_us;
+            if (receive_span_us > video->maximum_receive_span_us) {
+                video->maximum_receive_span_us = receive_span_us;
+            }
+            if (receive_span_us >= 5000) {
+                video->slow_receive_spans++;
+            }
             video->raw_bytes_completed +=
                 (uint64_t)video->completed_width * video->completed_height * 4;
             video->encoded_bytes_completed += video->assembling_frame_size;
@@ -982,13 +995,17 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             }
             else if (video->frames_completed % 120 == 0) {
                 fprintf(stderr,
-                        "[SameBoy Link][video] remote_video_client frames=%llu dropped=%llu rejected=%llu latest=%llu encoded_ratio=%.3f\n",
+                        "[SameBoy Link][video] remote_video_client frames=%llu dropped=%llu rejected=%llu latest=%llu encoded_ratio=%.3f receive_span_average_ms=%.3f receive_span_maximum_ms=%.3f receive_span_slow=%llu\n",
                         (unsigned long long)video->frames_completed,
                         (unsigned long long)video->frames_dropped,
                         (unsigned long long)video->packets_rejected,
                         (unsigned long long)video->completed_sequence,
                         video->raw_bytes_completed?
-                            (double)video->encoded_bytes_completed / video->raw_bytes_completed : 0.0);
+                            (double)video->encoded_bytes_completed / video->raw_bytes_completed : 0.0,
+                        (double)video->receive_span_time_us /
+                            video->frames_completed / 1000.0,
+                        video->maximum_receive_span_us / 1000.0,
+                        (unsigned long long)video->slow_receive_spans);
             }
         }
     }
@@ -1210,6 +1227,8 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     SDL_Renderer *client_renderer = NULL;
     SDL_GLContext client_gl_context = NULL;
     bool client_shader_initialized = false;
+    int client_swap_interval = 0;
+    bool client_adaptive_vsync_fallback = false;
     if (client_window && !disable_gl) {
         client_gl_context = SDL_GL_CreateContext(client_window);
         if (client_gl_context) {
@@ -1234,7 +1253,11 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 client_gl_context = NULL;
             }
             else {
-                SDL_GL_SetSwapInterval(configuration.vsync_mode);
+                if (SDL_GL_SetSwapInterval(-1)) {
+                    client_adaptive_vsync_fallback = true;
+                    SDL_GL_SetSwapInterval(0);
+                }
+                client_swap_interval = SDL_GL_GetSwapInterval();
             }
         }
     }
@@ -1307,10 +1330,16 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
             session_id,
             REMOTE_PLAY_PROTOCOL_VERSION);
     fprintf(stderr,
-            "[SameBoy Link][video] remote_client_presentation=%s filter=%s\n",
+            "[SameBoy Link][video] remote_client_presentation=%s filter=%s vsync=%s swap_interval=%d\n",
             client_gl_context? "OpenGL" : "SDL",
             client_gl_context? configuration.filter :
-                (configuration.remote_client_filter? "Bilinear" : "NearestNeighbor"));
+                (configuration.remote_client_filter? "Bilinear" : "NearestNeighbor"),
+            client_gl_context?
+                (client_swap_interval == -1? "adaptive" :
+                 (client_adaptive_vsync_fallback? "off-fallback" :
+                  (client_swap_interval == 0? "off" : "standard"))) :
+                "renderer-managed",
+            client_gl_context? client_swap_interval : 1);
 
     bool running = true;
     bool disconnected_to_frontend = false;
@@ -1318,6 +1347,10 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     uint16_t buttons = 0;
     uint64_t last_input_event_time = monotonic_time_us();
     uint64_t last_title_update_time = 0;
+    uint64_t frames_presented = 0;
+    uint64_t present_call_time_us = 0;
+    uint64_t maximum_present_call_us = 0;
+    uint64_t slow_present_calls = 0;
     RemoteVideoReceiver video = {0};
     RemoteAudioReceiver audio = {0};
     RemoteClockSync clock_sync = {0};
@@ -1623,6 +1656,16 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 present_end_time = monotonic_time_us();
             }
             if (presenting_new_frame) {
+                uint64_t present_call_us = present_end_time >= present_begin_time?
+                    present_end_time - present_begin_time : 0;
+                frames_presented++;
+                present_call_time_us += present_call_us;
+                if (present_call_us > maximum_present_call_us) {
+                    maximum_present_call_us = present_call_us;
+                }
+                if (present_call_us >= 18000) {
+                    slow_present_calls++;
+                }
                 record_presented_frame_latency(&latency,
                                                &frame_clock_sync,
                                                &frame_telemetry,
@@ -1659,12 +1702,21 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     }
     uint32_t final_audio_buffer_ms = remote_audio_buffered_ms(&audio, NULL);
     fprintf(stderr,
-            "[SameBoy Link][frontend] remote_input_client stopped packets_sent=%u video_frames=%llu video_dropped=%llu video_rejected=%llu video_superseded=%llu video_encoded_ratio=%.3f audio_codec=%s audio_callback_frames=%u audio_packets=%llu audio_dropped=%llu audio_stale=%llu audio_underflows=%llu audio_trims=%llu audio_frames_trimmed=%llu audio_buffer_ms=%u audio_target_ms=%u audio_max_buffer_ms=%u audio_rate_ppm=%.0f audio_max_arrival_gap_ms=%.3f audio_payload_bytes=%llu audio_average_payload_bytes=%.1f audio_average_decode_us=%.2f audio_plc_frames=%llu audio_decode_errors=%llu clock_samples=%llu rtt_ms=%.3f jitter_ms=%.3f clock_uncertainty_ms=%.3f latency_samples=%llu latency_latest_ms=%.3f latency_average_ms=%.3f latency_maximum_ms=%.3f\n",
+            "[SameBoy Link][frontend] remote_input_client stopped packets_sent=%u video_frames=%llu video_dropped=%llu video_rejected=%llu video_superseded=%llu video_presented=%llu present_call_average_ms=%.3f present_call_maximum_ms=%.3f present_call_slow=%llu receive_span_average_ms=%.3f receive_span_maximum_ms=%.3f receive_span_slow=%llu video_encoded_ratio=%.3f audio_codec=%s audio_callback_frames=%u audio_packets=%llu audio_dropped=%llu audio_stale=%llu audio_underflows=%llu audio_trims=%llu audio_frames_trimmed=%llu audio_buffer_ms=%u audio_target_ms=%u audio_max_buffer_ms=%u audio_rate_ppm=%.0f audio_max_arrival_gap_ms=%.3f audio_payload_bytes=%llu audio_average_payload_bytes=%.1f audio_average_decode_us=%.2f audio_plc_frames=%llu audio_decode_errors=%llu clock_samples=%llu rtt_ms=%.3f jitter_ms=%.3f clock_uncertainty_ms=%.3f latency_samples=%llu latency_latest_ms=%.3f latency_average_ms=%.3f latency_maximum_ms=%.3f\n",
             sequence,
             (unsigned long long)video.frames_completed,
             (unsigned long long)video.frames_dropped,
             (unsigned long long)video.packets_rejected,
             (unsigned long long)video.frames_superseded_before_present,
+            (unsigned long long)frames_presented,
+            frames_presented?
+                (double)present_call_time_us / frames_presented / 1000.0 : 0.0,
+            maximum_present_call_us / 1000.0,
+            (unsigned long long)slow_present_calls,
+            video.frames_completed?
+                (double)video.receive_span_time_us / video.frames_completed / 1000.0 : 0.0,
+            video.maximum_receive_span_us / 1000.0,
+            (unsigned long long)video.slow_receive_spans,
             video.raw_bytes_completed?
                 (double)video.encoded_bytes_completed / video.raw_bytes_completed : 0.0,
             remote_audio_codec_name(audio.codec),

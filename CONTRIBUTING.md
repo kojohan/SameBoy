@@ -19,6 +19,10 @@ On Windows, use the reproducible build documented in `build-faq.md`:
 .\build-windows.ps1
 .\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb"
 .\publish-windows-build.ps1 -DestinationRoot "M:\SAME-LINKTEST"
+.\summarize-windows-link-logs.ps1 `
+  -HostPath "M:\SAME-LINKTEST\LOGS\TIMESTAMP-HOSTPC-host-ID" `
+  -ClientPath "M:\SAME-LINKTEST\LOGS\TIMESTAMP-CLIENTPC-client-ID" `
+  -TestLabel "lan-test"
 ```
 
 Before submitting a change, run the relevant single-player, Local Link and/or

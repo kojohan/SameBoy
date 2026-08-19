@@ -93,7 +93,7 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
-**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Opus was tested and deferred; client resizing and independent P1-only host presentation are complete. Direct public-IPv4 and instrumented opposite-direction Ethernet/Wi-Fi tests pass functionally; measured transport and presentation pacing optimization is next.)
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and three Wi-Fi/Wi-Fi runs are accepted as the current playable baseline. Opus was tested and deferred; client resizing, zero-queue presentation telemetry and immutable P1-only host presentation are complete. Deeper transport pacing is paused while adaptive-PCM telemetry/tuning remains.)
 
 **Goal:** provide good image quality without adding unnecessary latency.
 
@@ -107,12 +107,12 @@ Client-side presentation remains local so nearest-neighbour scaling, integer sca
 
 Candidate backends include raw/reference transport, fast lossless compression, tile/XOR delta methods, conventional low-latency codecs, and optional GPU hardware encode/decode where measurement shows a benefit.
 
-Before adding another codec, this phase prioritizes a machine-readable
-performance gate, input/audio-priority scheduling, paced video datagrams,
-adaptive-PCM tuning and timestamp-driven client presentation. Physical tests
-showed 36–42 ms average input-to-present latency, but also one 167 ms Wi-Fi
-burst, up to 33 audio underflows and a stable roughly 3.3% rate of completed
-frames superseded before presentation. See
+Before adding another codec, this phase prioritizes the implemented machine-
+readable performance gate and adaptive-PCM telemetry/tuning. Protocol v5 keeps
+the single latest-complete-frame policy and uses larger MTU-safe video payloads
+instead of adding presentation buffering. Three repeated Wi-Fi/Wi-Fi runs
+measured 34.5–37.9 ms average input-to-present latency, 45.7–53.3 ms p95 and
+0.71–0.92% completed frames superseded before presentation. See
 `REMOTE_PLAY_PERFORMANCE_PLAN.md` for the exact evidence and P0–P5 gates.
 
 **Exit criterion:** stream quality is selectable and queues remain bounded without latency growth.

@@ -228,12 +228,23 @@ function Invoke-RemoteLoopback {
         Assert-LogPattern -Path $clientTest.StderrPath `
                           -Pattern "remote_client_presentation=$ExpectedPresentation" `
                           -Description "$Name presentation mode"
+        if ($ExpectedPresentation -eq "OpenGL") {
+            Assert-LogPattern -Path $clientTest.StderrPath `
+                              -Pattern "remote_client_presentation=OpenGL.*vsync=(adaptive|off-fallback)" `
+                              -Description "$Name adaptive VSync selection"
+        }
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_input_host client_active first_sequence=1" `
                           -Description "$Name host input reception"
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_video_host first_stream_frame=1" `
                           -Description "$Name host video transmission"
+        Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_video_host first_stream_frame=1.*burst_us=" `
+                          -Description "$Name host video burst telemetry"
+        Assert-LogPattern -Path $clientTest.StderrPath `
+                          -Pattern "remote_video_client frames=1[2-9][0-9].*receive_span_average_ms=" `
+                          -Description "$Name client receive-span telemetry"
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_audio_host packets=([6-9][0-9]{2}|[0-9]{4,}) dropped=0" `
                           -Description "$Name host audio transmission"
