@@ -98,12 +98,15 @@ Local Link, explicit session modes, persistent independent controls, menu-driven
 Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
 settings-capable Remote Client with local SameBoy shaders/filters. Protocol v5
 reduces lossless-video datagram count without adding a frame queue, and repeated
-Wi-Fi/Wi-Fi play is the accepted current baseline. The next optimization work is:
+Wi-Fi/Wi-Fi play is the accepted current baseline. Bounded client-side audio
+arrival histograms now provide session and ten-second p50/p95/p99 measurements
+without per-packet logging. A physical Wi-Fi/Wi-Fi verification had no audible
+audio faults, so the current low-latency PCM settings remain unchanged. The next
+work is:
 
-1. add audio inter-arrival percentile/window telemetry and fix adapter metadata selection;
-2. tune adaptive PCM startup, target hysteresis and drift against repeated physical tests;
-3. revisit priority scheduling and lower-bandwidth video only when measurements justify it;
-4. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
+1. complete longer baselines and add remaining RTT/video/queue time-window telemetry;
+2. revisit PCM, priority scheduling or lower-bandwidth video only when repeated audible/visible evidence justifies it;
+3. add authenticated/encrypted sessions, coordination, NAT traversal and relay fallback.
 
 See [REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md),
 [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.

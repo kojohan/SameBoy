@@ -184,7 +184,7 @@ Keep audio identifiable per emulator core.
 
 Host local audio can select/mix P1 and P2. Remote Play normally sends the P2 stream to the client using small blocks and a deliberately bounded jitter buffer.
 
-Protocol v5 currently sends uncompressed 48 kHz stereo PCM with an adaptive jitter buffer. Physical LAN and Internet testing found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default.
+Protocol v5 currently sends uncompressed 48 kHz stereo PCM with an adaptive jitter buffer. Physical LAN and Internet testing found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
 
 A large audio buffer must never silently become the dominant latency source.
 

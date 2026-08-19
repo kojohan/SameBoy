@@ -155,6 +155,31 @@ framebuffer while the next frame could be drawn. Local Link and Remote Host
 P1-only presentation now use the immutable previous completed framebuffer;
 this correction adds no network or input latency.
 
+## Test E — schema-v3 Wi-Fi/Wi-Fi audio telemetry
+
+The `audio-telemetry` build physically verified the bounded arrival histograms
+and corrected adapter selection over approximately 111.3 active seconds. Both
+machines recorded their active 1.2 Gbit/s Wi-Fi interfaces instead of a
+disconnected Ethernet route, and executable hashes matched.
+
+| Measurement | Result |
+|---|---:|
+| Audio arrival average / p50 / p95 / p99 | 5.170 / 1 / 18 / 20 ms |
+| Normal ten-second-window maximum | 30.164-34.256 ms |
+| Audio dropped / stale / decode errors / trims | 0 / 0 / 0 / 0 |
+| Audio underflows | 2 |
+| Video dropped / superseded | 0 / 51 (0.77%) |
+| Input-to-present average / p95 / maximum | 37.701 / 52.662 / 54.106 ms |
+| Host video burst average / maximum | 0.288 / 0.729 ms |
+
+One audio underflow occurred at 90.8 seconds during a 27.420 ms arrival gap;
+the adaptive target rose from 45 to 55 ms and remained stable. The other was
+paired with a 3.795-second gap immediately before the network thread stopped,
+so it is treated as shutdown/pause tail rather than steady-state network
+behavior. The user heard no audio fault during the run. Increasing the minimum
+PCM buffer solely to remove these counters would add latency without an
+observed benefit, so the current parameters remain the accepted baseline.
+
 ## Evidence-based conclusions
 
 1. Protocol validation and bounded queues are working: rejected/stale counts
@@ -162,8 +187,9 @@ this correction adds no network or input latency.
 2. Protocol v4 lossless video needed roughly 9.5-9.7 Mbit/s plus 1.536 Mbit/s
    PCM before UDP/IP overhead. Protocol v5 reduces the normal datagram count
    from roughly 20 to 16 per frame without increasing buffering.
-3. A wired host is the preferred current setup. It greatly improved continuous
-   audio delivery, although Wi-Fi can still produce an isolated 80–140 ms burst.
+3. A wired host remains useful for controlled baselines, but repeated
+   Wi-Fi/Wi-Fi play is currently acceptable and Test E had no audible audio
+   fault or media packet loss.
 4. A larger fixed audio buffer alone is not the right first fix. Test B reached
    its 100 ms target and still underflowed, while Test C alternated between
    trimming bursts and later consuming the queue.
@@ -172,21 +198,24 @@ this correction adds no network or input latency.
    reduced this to 0.71-0.92%, although the first VSync-only experiment felt
    unchanged; that counter is evidence, not a complete smoothness measure.
 6. Protocol v5 averaged 34.5-37.9 ms input-to-present latency with p95 below
-   54 ms in all three repetitions. Audio arrival gaps and underflows remain the
-   clearest next optimization target.
+   54 ms across the accepted repetitions. Counters must be correlated with the
+   heard/seen result; do not add buffering to eliminate an inaudible isolated
+   underflow or a shutdown-tail event.
 
 ## Optimization plan
 
 ### P0 — reproducible performance gate and richer telemetry
 
 1. Extend the implemented `summarize-windows-link-logs.ps1` JSON/Markdown
-   summary as new telemetry is added. Its first version already handles
-   normalized rates, latency percentiles, event windows and the shutdown tail.
+   summary as new telemetry is added. Schema v3 handles normalized rates,
+   latency percentiles, audio-arrival percentiles/windows, event windows and the
+   shutdown tail.
 2. Keep the implemented launcher metadata and unique shared-log naming aligned
-   with the summarizer as roles and network diagnostics expand.
-3. Add p50/p95/p99/max audio inter-arrival gap, RTT, jitter, video network time,
-   queue age and input-to-present latency. Report metrics in fixed time windows
-   so a single burst can be located automatically.
+   with the summarizer. Adapter selection now rejects disconnected, zero-speed
+   and addressless interfaces before recording the active default route.
+3. Extend the implemented p50/p95/p99/max audio inter-arrival measurements with
+   comparable fixed-window RTT, jitter, video network time, queue age and total
+   latency data so every burst can be located automatically.
 4. Count frames actually presented separately from completed, superseded and
    repeated frames. Log host frame cadence and sender queue age.
 5. Establish a baseline matrix with at least three five-minute runs per setup:
@@ -238,6 +267,11 @@ Gate: zero post-start underflows in a ten-minute wired run and target zero in
 normal Wi-Fi runs, with settled audio target at or below 100 ms and no repeated
 trim/underflow cycle.
 
+Test E did not meet a literal zero-counter Wi-Fi target, but its single
+steady-state callback underflow was inaudible and did not repeat after the
+adaptive target rose. Preserve current latency until an audible or repeatable
+failure justifies a parameter change.
+
 ### P3 — pace client video presentation
 
 1. Keep the existing single latest-complete-frame mailbox: do not add a host or
@@ -286,9 +320,7 @@ public-facing Internet release.
 
 ## Recommended implementation order
 
-1. Add audio inter-arrival percentile/window telemetry and correct active-adapter metadata selection.
-2. Tune adaptive PCM startup, target hysteresis, physical capacity and drift from the new evidence.
-3. Complete longer fixed-role Ethernet/Wi-Fi baseline repetitions.
-4. Revisit priority scheduling or chunk pacing only if the accepted protocol-v5 baseline shows a measurable need.
-5. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
-6. Run controlled impairment and longer Internet regressions.
+1. Complete longer fixed-role Ethernet/Wi-Fi baseline repetitions and remaining fixed-window telemetry.
+2. Revisit PCM, priority scheduling or chunk pacing only if the accepted protocol-v5 baseline shows an audible, visible or repeatable measurable need.
+3. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
+4. Run controlled impairment and longer Internet regressions.

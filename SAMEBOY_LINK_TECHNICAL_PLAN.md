@@ -249,9 +249,7 @@ Introduce `EmulatorSlot` around the existing SDL `GB_gameboy_t` while keeping on
 
 ## Next coding tasks
 
-1. Extend the implemented host/client summarizer with audio inter-arrival percentile/window telemetry.
-2. Correct launcher adapter selection so disconnected zero-speed interfaces cannot replace the active Wi-Fi/Ethernet path.
-3. Tune adaptive PCM startup, target hysteresis, physical capacity and drift against repeated physical runs.
-4. Revisit a priority sender scheduler and lower-bandwidth codecs only when the accepted protocol-v5 baseline shows a measurable need.
-5. Authenticate and encrypt protocol-v5 sessions.
-6. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.
+1. Add remaining fixed-window RTT, video-network, queue-age and total-latency telemetry, then complete longer fixed-role baselines.
+2. Preserve the current PCM target/hysteresis and protocol-v5 sender unless repeated audible or visible evidence shows a measurable need.
+3. Authenticate and encrypt protocol-v5 sessions.
+4. Implement coordination, NAT traversal and relay fallback so manual public-IP entry and port forwarding are no longer needed.

@@ -319,9 +319,11 @@ log directories separate and run this command from the source tree:
 
 The paths may instead point directly to each `sameboy-session.log`. By default,
 the script creates a timestamped JSON and Markdown pair under
-`build\regression\summaries`. The report checks build hashes, accounts for the
+`build\regression\summaries`. Schema v3 checks build hashes, accounts for the
 normal shutdown tail, computes normalized loss/underflow rates and extracts
-latency percentiles and ten-second event windows from detailed timing records.
+latency percentiles, bounded audio-arrival percentiles, ten-second audio windows
+and timed event windows. Audio telemetry is aggregated in memory so logging does
+not write once per packet during play.
 
 Run the client from a genuinely different Internet connection. A client on the
 same LAN may fail when using the public address if the router lacks NAT loopback;

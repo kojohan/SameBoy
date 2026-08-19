@@ -371,8 +371,7 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 
 ## Next implementation tasks
 
-1. Build a repeatable performance gate and pace priority traffic/video without regressing the lossless reference path.
-2. Tune adaptive PCM and client presentation against repeated wired/Wi-Fi measurements.
-3. Evaluate lower-bandwidth transport after pacing is stable.
-4. Add session authentication and encryption before treating direct Internet play as a public feature.
-5. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.
+1. Complete the remaining fixed-window telemetry and longer Ethernet/Wi-Fi performance gate.
+2. Preserve the accepted PCM/protocol-v5 baseline unless repeated audible or visible evidence justifies more pacing/buffering work.
+3. Add session authentication and encryption before treating direct Internet play as a public feature.
+4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.

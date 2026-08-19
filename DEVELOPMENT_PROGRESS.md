@@ -758,3 +758,44 @@ After the P1 presentation correction, the warnings-as-errors Windows build and
 all four automated smoke modes (single-player, Local Link, Remote OpenGL and
 Remote SDL) passed. The corrected build was also published to the shared
 `SAME-LINKTEST` build directory for physical verification.
+
+### Bounded audio-arrival telemetry and active adapter metadata
+
+Remote Client now measures every post-start PCM packet arrival gap in fixed
+1 ms histograms. The cumulative histogram and the current ten-second histogram
+use bounded in-memory arrays; the client writes only its existing periodic
+checkpoint, one compact record per completed time window and the final session
+summary. This provides average, p50, p95, p99 and exact maximum arrival gaps
+without restoring per-packet or NAS writes that could disturb realtime play.
+
+The paired-log summarizer advances to schema version 3 and includes both the
+session distribution and individual ten-second audio windows in JSON and
+Markdown. It remains compatible with older logs that contain only the maximum
+arrival gap. The Windows launcher now evaluates active default routes in metric
+order and rejects adapters that are disconnected, report zero link speed or
+lack a usable IPv4 address. An isolated check on the Wi-Fi test PC correctly
+selected its active 1.2 Gbit/s Wi-Fi interface instead of the disconnected
+`0 bps` Ethernet route.
+
+The warnings-as-errors Windows build and all four automated smoke modes passed.
+The schema-v3 summarizer reproduced the new automated arrival distribution and
+also processed the latest protocol-v5 physical log as a legacy-compatible
+input. The verified dirty development runtime was published as the versioned
+NAS build `audio-telemetry`. Physical verification of the new metadata/windows
+was designated as the next test before any adaptive-PCM parameter change.
+
+The subsequent Wi-Fi/Wi-Fi physical run covered approximately 111.3 active
+seconds. Both machines recorded the correct active 1.2 Gbit/s Wi-Fi adapter and
+the same executable hash. Audio arrival averaged 5.170 ms with p95/p99 of
+18/20 ms; normal ten-second windows peaked between 30.164 and 34.256 ms with no
+lost, stale or undecodable audio packets and no trims. One steady-state
+underflow at 90.8 seconds was inaudible and did not recur after the target rose
+from 45 to 55 ms. A second counter followed a 3.795-second gap immediately
+before network-thread shutdown and is classified as tail behavior.
+
+The same run had zero video drops, 0.77% completed frames superseded before
+presentation, 37.701/52.662/54.106 ms average/p95/maximum input-to-present
+latency and a 0.729 ms maximum host video burst. The user heard no audio fault.
+Because increasing the minimum PCM target would add latency without an observed
+benefit, the existing PCM parameters remain unchanged and deeper pacing work is
+again deferred until a repeatable audible or visible failure appears.

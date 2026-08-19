@@ -220,7 +220,7 @@ function Invoke-RemoteLoopback {
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
         Wait-LogPattern -Path $clientTest.StderrPath `
-                        -Pattern "remote_audio_client packets=([6-9][0-9]{2}|[0-9]{4,}).*dropped=0 stale=0.*decode_errors=0" `
+                        -Pattern "remote_audio_client packets=([6-9][0-9]{2}|[0-9]{4,}).*dropped=0 stale=0.*arrival_samples=[1-9][0-9]*.*arrival_p50_ms=.*arrival_p95_ms=.*arrival_p99_ms=.*decode_errors=0" `
                         -Description "$Name audio stream" `
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
@@ -248,6 +248,13 @@ function Invoke-RemoteLoopback {
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_audio_host packets=([6-9][0-9]{2}|[0-9]{4,}) dropped=0" `
                           -Description "$Name host audio transmission"
+        Stop-TestProcess -Process $clientTest.Process
+        Assert-LogPattern -Path $clientTest.StderrPath `
+                          -Pattern "remote_audio_arrival_window .*samples=[1-9][0-9]*.*p50_ms=.*p95_ms=.*p99_ms=.*maximum_ms=" `
+                          -Description "$Name client audio arrival window telemetry"
+        Assert-LogPattern -Path $clientTest.StderrPath `
+                          -Pattern "remote_input_client stopped .*audio_arrival_samples=[1-9][0-9]*.*audio_arrival_average_ms=.*audio_arrival_p50_ms=.*audio_arrival_p95_ms=.*audio_arrival_p99_ms=" `
+                          -Description "$Name client audio arrival session telemetry"
         Assert-NoFatalLog -Paths @($hostTest.StderrPath, $clientTest.StderrPath)
         Write-Host "[PASS] $Name"
     }

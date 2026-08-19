@@ -26,6 +26,9 @@
 #define REMOTE_AUDIO_TARGET_DECAY_US 30000000
 #define REMOTE_AUDIO_DRIFT_GAIN 0.05
 #define REMOTE_AUDIO_MAX_RATE_CORRECTION 0.002
+#define REMOTE_AUDIO_ARRIVAL_BUCKET_US 1000
+#define REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT 501
+#define REMOTE_AUDIO_ARRIVAL_WINDOW_MS 10000
 
 static uint64_t client_start_time_us;
 
@@ -122,6 +125,14 @@ typedef struct {
     uint32_t last_sequence;
     uint64_t last_packet_receive_us;
     uint64_t maximum_arrival_gap_us;
+    uint64_t arrival_gap_time_us;
+    uint64_t arrival_gap_samples;
+    uint64_t arrival_window_time_us;
+    uint64_t arrival_window_samples;
+    uint64_t arrival_window_maximum_gap_us;
+    uint64_t arrival_window_start_ms;
+    uint32_t arrival_gap_histogram[REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT];
+    uint32_t arrival_window_histogram[REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT];
     uint64_t last_target_adjustment_us;
     uint64_t packets_received;
     uint64_t packets_dropped;
@@ -154,6 +165,93 @@ static uint64_t client_elapsed_ms(void)
     uint64_t now = monotonic_time_us();
     return client_start_time_us && now >= client_start_time_us?
         (now - client_start_time_us) / 1000 : 0;
+}
+
+static unsigned remote_audio_arrival_bucket(uint64_t gap_us)
+{
+    uint64_t bucket = (gap_us + REMOTE_AUDIO_ARRIVAL_BUCKET_US - 1) /
+                      REMOTE_AUDIO_ARRIVAL_BUCKET_US;
+    return bucket < REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT?
+        (unsigned)bucket : REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT - 1;
+}
+
+static double remote_audio_arrival_percentile_ms(const uint32_t *histogram,
+                                                 uint64_t samples,
+                                                 unsigned percentile)
+{
+    if (!samples) return 0.0;
+    uint64_t rank = (samples * percentile + 99) / 100;
+    uint64_t cumulative = 0;
+    for (unsigned bucket = 0;
+         bucket < REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT;
+         bucket++) {
+        cumulative += histogram[bucket];
+        if (cumulative >= rank) {
+            return bucket * REMOTE_AUDIO_ARRIVAL_BUCKET_US / 1000.0;
+        }
+    }
+    return (REMOTE_AUDIO_ARRIVAL_BUCKET_COUNT - 1) *
+           REMOTE_AUDIO_ARRIVAL_BUCKET_US / 1000.0;
+}
+
+static void flush_audio_arrival_window(RemoteAudioReceiver *receiver,
+                                       uint64_t end_ms)
+{
+    if (!receiver->arrival_window_samples) return;
+    fprintf(stderr,
+            "[SameBoy Link][audio] remote_audio_arrival_window start_ms=%llu end_ms=%llu samples=%llu average_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f maximum_ms=%.3f\n",
+            (unsigned long long)receiver->arrival_window_start_ms,
+            (unsigned long long)end_ms,
+            (unsigned long long)receiver->arrival_window_samples,
+            (double)receiver->arrival_window_time_us /
+                receiver->arrival_window_samples / 1000.0,
+            remote_audio_arrival_percentile_ms(receiver->arrival_window_histogram,
+                                               receiver->arrival_window_samples,
+                                               50),
+            remote_audio_arrival_percentile_ms(receiver->arrival_window_histogram,
+                                               receiver->arrival_window_samples,
+                                               95),
+            remote_audio_arrival_percentile_ms(receiver->arrival_window_histogram,
+                                               receiver->arrival_window_samples,
+                                               99),
+            receiver->arrival_window_maximum_gap_us / 1000.0);
+    memset(receiver->arrival_window_histogram,
+           0,
+           sizeof(receiver->arrival_window_histogram));
+    receiver->arrival_window_time_us = 0;
+    receiver->arrival_window_samples = 0;
+    receiver->arrival_window_maximum_gap_us = 0;
+}
+
+static void record_audio_arrival_gap(RemoteAudioReceiver *receiver,
+                                     uint64_t gap_us,
+                                     uint64_t elapsed_ms)
+{
+    if (!receiver->arrival_window_samples) {
+        receiver->arrival_window_start_ms =
+            elapsed_ms / REMOTE_AUDIO_ARRIVAL_WINDOW_MS *
+            REMOTE_AUDIO_ARRIVAL_WINDOW_MS;
+    }
+    else if (elapsed_ms >= receiver->arrival_window_start_ms +
+                          REMOTE_AUDIO_ARRIVAL_WINDOW_MS) {
+        flush_audio_arrival_window(receiver,
+                                   receiver->arrival_window_start_ms +
+                                       REMOTE_AUDIO_ARRIVAL_WINDOW_MS);
+        receiver->arrival_window_start_ms =
+            elapsed_ms / REMOTE_AUDIO_ARRIVAL_WINDOW_MS *
+            REMOTE_AUDIO_ARRIVAL_WINDOW_MS;
+    }
+
+    unsigned bucket = remote_audio_arrival_bucket(gap_us);
+    receiver->arrival_gap_histogram[bucket]++;
+    receiver->arrival_window_histogram[bucket]++;
+    receiver->arrival_gap_time_us += gap_us;
+    receiver->arrival_gap_samples++;
+    receiver->arrival_window_time_us += gap_us;
+    receiver->arrival_window_samples++;
+    if (gap_us > receiver->arrival_window_maximum_gap_us) {
+        receiver->arrival_window_maximum_gap_us = gap_us;
+    }
 }
 
 static bool send_input(RemoteUdpSocket *transport,
@@ -720,6 +818,11 @@ static void receive_audio_packet(RemoteAudioReceiver *receiver,
     if (arrival_gap_us > receiver->maximum_arrival_gap_us) {
         receiver->maximum_arrival_gap_us = arrival_gap_us;
     }
+    if (arrival_gap_us) {
+        record_audio_arrival_gap(receiver,
+                                 arrival_gap_us,
+                                 client_elapsed_ms());
+    }
 
     SDL_LockAudioDevice(receiver->device);
     bool target_raised = false;
@@ -838,7 +941,7 @@ static void receive_audio_packet(RemoteAudioReceiver *receiver,
     }
     else if (receiver->packets_received % 600 == 0) {
         fprintf(stderr,
-                "[SameBoy Link][audio] remote_audio_client packets=%llu dropped=%llu stale=%llu underflows=%llu trims=%llu queued_ms=%u target_ms=%u rate_ppm=%.0f max_arrival_gap_ms=%.3f codec=%s average_payload_bytes=%.1f average_decode_us=%.2f plc_frames=%llu decode_errors=%llu\n",
+                "[SameBoy Link][audio] remote_audio_client packets=%llu dropped=%llu stale=%llu underflows=%llu trims=%llu queued_ms=%u target_ms=%u rate_ppm=%.0f max_arrival_gap_ms=%.3f arrival_samples=%llu arrival_p50_ms=%.3f arrival_p95_ms=%.3f arrival_p99_ms=%.3f codec=%s average_payload_bytes=%.1f average_decode_us=%.2f plc_frames=%llu decode_errors=%llu\n",
                 (unsigned long long)receiver->packets_received,
                 (unsigned long long)receiver->packets_dropped,
                 (unsigned long long)receiver->packets_stale,
@@ -848,6 +951,16 @@ static void receive_audio_packet(RemoteAudioReceiver *receiver,
                 target_buffer_ms,
                 rate_correction * 1000000.0,
                 receiver->maximum_arrival_gap_us / 1000.0,
+                (unsigned long long)receiver->arrival_gap_samples,
+                remote_audio_arrival_percentile_ms(receiver->arrival_gap_histogram,
+                                                   receiver->arrival_gap_samples,
+                                                   50),
+                remote_audio_arrival_percentile_ms(receiver->arrival_gap_histogram,
+                                                   receiver->arrival_gap_samples,
+                                                   95),
+                remote_audio_arrival_percentile_ms(receiver->arrival_gap_histogram,
+                                                   receiver->arrival_gap_samples,
+                                                   99),
                 remote_audio_codec_name(receiver->codec),
                 (double)receiver->payload_bytes / receiver->packets_received,
                 (double)receiver->decode_time_us / receiver->packets_received,
@@ -1701,8 +1814,9 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
         SDL_PauseAudioDevice(audio.device, 1);
     }
     uint32_t final_audio_buffer_ms = remote_audio_buffered_ms(&audio, NULL);
+    flush_audio_arrival_window(&audio, client_elapsed_ms());
     fprintf(stderr,
-            "[SameBoy Link][frontend] remote_input_client stopped packets_sent=%u video_frames=%llu video_dropped=%llu video_rejected=%llu video_superseded=%llu video_presented=%llu present_call_average_ms=%.3f present_call_maximum_ms=%.3f present_call_slow=%llu receive_span_average_ms=%.3f receive_span_maximum_ms=%.3f receive_span_slow=%llu video_encoded_ratio=%.3f audio_codec=%s audio_callback_frames=%u audio_packets=%llu audio_dropped=%llu audio_stale=%llu audio_underflows=%llu audio_trims=%llu audio_frames_trimmed=%llu audio_buffer_ms=%u audio_target_ms=%u audio_max_buffer_ms=%u audio_rate_ppm=%.0f audio_max_arrival_gap_ms=%.3f audio_payload_bytes=%llu audio_average_payload_bytes=%.1f audio_average_decode_us=%.2f audio_plc_frames=%llu audio_decode_errors=%llu clock_samples=%llu rtt_ms=%.3f jitter_ms=%.3f clock_uncertainty_ms=%.3f latency_samples=%llu latency_latest_ms=%.3f latency_average_ms=%.3f latency_maximum_ms=%.3f\n",
+            "[SameBoy Link][frontend] remote_input_client stopped packets_sent=%u video_frames=%llu video_dropped=%llu video_rejected=%llu video_superseded=%llu video_presented=%llu present_call_average_ms=%.3f present_call_maximum_ms=%.3f present_call_slow=%llu receive_span_average_ms=%.3f receive_span_maximum_ms=%.3f receive_span_slow=%llu video_encoded_ratio=%.3f audio_codec=%s audio_callback_frames=%u audio_packets=%llu audio_dropped=%llu audio_stale=%llu audio_underflows=%llu audio_trims=%llu audio_frames_trimmed=%llu audio_buffer_ms=%u audio_target_ms=%u audio_max_buffer_ms=%u audio_rate_ppm=%.0f audio_max_arrival_gap_ms=%.3f audio_arrival_samples=%llu audio_arrival_average_ms=%.3f audio_arrival_p50_ms=%.3f audio_arrival_p95_ms=%.3f audio_arrival_p99_ms=%.3f audio_payload_bytes=%llu audio_average_payload_bytes=%.1f audio_average_decode_us=%.2f audio_plc_frames=%llu audio_decode_errors=%llu clock_samples=%llu rtt_ms=%.3f jitter_ms=%.3f clock_uncertainty_ms=%.3f latency_samples=%llu latency_latest_ms=%.3f latency_average_ms=%.3f latency_maximum_ms=%.3f\n",
             sequence,
             (unsigned long long)video.frames_completed,
             (unsigned long long)video.frames_dropped,
@@ -1733,6 +1847,19 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
                 audio.sample_rate : 0,
             audio.rate_correction * 1000000.0,
             audio.maximum_arrival_gap_us / 1000.0,
+            (unsigned long long)audio.arrival_gap_samples,
+            audio.arrival_gap_samples?
+                (double)audio.arrival_gap_time_us /
+                    audio.arrival_gap_samples / 1000.0 : 0.0,
+            remote_audio_arrival_percentile_ms(audio.arrival_gap_histogram,
+                                               audio.arrival_gap_samples,
+                                               50),
+            remote_audio_arrival_percentile_ms(audio.arrival_gap_histogram,
+                                               audio.arrival_gap_samples,
+                                               95),
+            remote_audio_arrival_percentile_ms(audio.arrival_gap_histogram,
+                                               audio.arrival_gap_samples,
+                                               99),
             (unsigned long long)audio.payload_bytes,
             audio.packets_received?
                 (double)audio.payload_bytes / audio.packets_received : 0.0,

@@ -366,6 +366,7 @@ $audioKbps = [double](Get-RecordValue -Record $hostAudioFinal -Name "payload_bit
 
 [object[]]$latencyRecords = @(Get-RecordSeries -Content $clientContent -Marker "remote_latency ")
 [object[]]$clockRecords = @(Get-RecordSeries -Content $clientContent -Marker "remote_clock_sync_client samples=")
+[object[]]$audioArrivalWindowRecords = @(Get-RecordSeries -Content $clientContent -Marker "remote_audio_arrival_window ")
 $latencyFields = @(
     "total_ms",
     "event_to_send_ms",
@@ -390,6 +391,34 @@ $clockStatistics = [ordered]@{
     jitter_ms = Get-FieldStatistics -Records $clockRecords -Field "jitter_ms"
     uncertainty_ms = Get-FieldStatistics -Records $clockRecords -Field "uncertainty_ms"
 }
+$audioArrivalSamplesValue = Get-RecordValue -Record $clientFinal `
+                                              -Name "audio_arrival_samples" `
+                                              -Default $null
+$audioArrivalMeasured = $null -ne $audioArrivalSamplesValue
+$audioArrivalStatistics = [ordered]@{
+    measured = $audioArrivalMeasured
+    resolutionMs = if ($audioArrivalMeasured) { 1 } else { $null }
+    samples = if ($audioArrivalMeasured) { [long]$audioArrivalSamplesValue } else { 0 }
+    average = Get-RecordValue -Record $clientFinal -Name "audio_arrival_average_ms" -Default $null
+    p50 = Get-RecordValue -Record $clientFinal -Name "audio_arrival_p50_ms" -Default $null
+    p95 = Get-RecordValue -Record $clientFinal -Name "audio_arrival_p95_ms" -Default $null
+    p99 = Get-RecordValue -Record $clientFinal -Name "audio_arrival_p99_ms" -Default $null
+    maximum = Get-RecordValue -Record $clientFinal -Name "audio_max_arrival_gap_ms" -Default $null
+}
+$audioArrivalWindows = @(
+    foreach ($record in $audioArrivalWindowRecords) {
+        [pscustomobject][ordered]@{
+            startSeconds = [Math]::Round([double](Get-RecordValue $record "start_ms") / 1000, 3)
+            endSeconds = [Math]::Round([double](Get-RecordValue $record "end_ms") / 1000, 3)
+            samples = [long](Get-RecordValue $record "samples")
+            averageMs = Get-RecordValue $record "average_ms" -Default $null
+            p50Ms = Get-RecordValue $record "p50_ms" -Default $null
+            p95Ms = Get-RecordValue $record "p95_ms" -Default $null
+            p99Ms = Get-RecordValue $record "p99_ms" -Default $null
+            maximumMs = Get-RecordValue $record "maximum_ms" -Default $null
+        }
+    }
+)
 
 $videoDropPercent = if ($clientVideoFrames + $videoDropped) {
     $videoDropped * 100 / ($clientVideoFrames + $videoDropped)
@@ -437,7 +466,12 @@ if ([double]$totalLatencyMaximum -gt 100) {
 if ($latencyRecords.Count -eq 0) {
     $observations.Add("No detailed remote_latency samples were available.")
 }
-$observations.Add("Audio inter-arrival percentiles are unavailable in current logs; only the session maximum is recorded.")
+if (-not $audioArrivalMeasured) {
+    $observations.Add("Audio inter-arrival percentiles are unavailable in this older log; only the session maximum is recorded.")
+}
+elseif ([double]$audioArrivalStatistics.p99 -gt 60) {
+    $observations.Add("Audio inter-arrival p99 exceeded the current 60 ms Wi-Fi target.")
+}
 
 if ([string]::IsNullOrWhiteSpace($TestLabel)) {
     $hostComputer = [string](Get-RecordValue -Record $hostMetadata -Name "computer" -Default "host")
@@ -453,7 +487,7 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
 
 $summary = [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     generatedAtUtc = [DateTime]::UtcNow.ToString("o")
     testLabel = $TestLabel
     inputs = [ordered]@{
@@ -523,6 +557,8 @@ $summary = [ordered]@{
     }
     latencyStatistics = $latencyStatistics
     loggedClockCheckpointStatistics = $clockStatistics
+    audioArrivalStatistics = $audioArrivalStatistics
+    audioArrivalWindows = @($audioArrivalWindows)
     timedEventWindows = @(Get-TimedEventWindows -Content $clientContent)
     observations = @($observations)
 }
@@ -569,6 +605,27 @@ $markdown.Add("| Client audio underflows / trims | $([long]$audioUnderflows) / $
 $markdown.Add("| Maximum audio arrival gap | $(Format-Number (Get-RecordValue $clientFinal 'audio_max_arrival_gap_ms')) ms |")
 $markdown.Add("| Host clock pings / pongs | $([long]$clockPings) / $([long]$clockPongs) |")
 $markdown.Add("")
+$markdown.Add("## Audio packet inter-arrival")
+$markdown.Add("")
+$markdown.Add("Percentiles use a bounded 1 ms histogram in the client; the maximum and average retain microsecond-derived precision.")
+$markdown.Add("")
+$markdown.Add("| Samples | Average | p50 | p95 | p99 | Maximum |")
+$markdown.Add("|---:|---:|---:|---:|---:|---:|")
+$markdown.Add("| $($audioArrivalStatistics.samples) | $(Format-Number $audioArrivalStatistics.average) ms | $(Format-Number $audioArrivalStatistics.p50) ms | $(Format-Number $audioArrivalStatistics.p95) ms | $(Format-Number $audioArrivalStatistics.p99) ms | $(Format-Number $audioArrivalStatistics.maximum) ms |")
+$markdown.Add("")
+$markdown.Add("### Ten-second audio arrival windows")
+$markdown.Add("")
+if ($audioArrivalWindows.Count -eq 0) {
+    $markdown.Add("No windowed audio inter-arrival telemetry was available.")
+}
+else {
+    $markdown.Add("| Window | Samples | Average | p50 | p95 | p99 | Maximum |")
+    $markdown.Add("|---:|---:|---:|---:|---:|---:|---:|")
+    foreach ($window in $audioArrivalWindows) {
+        $markdown.Add("| $(Format-Number $window.startSeconds)-$(Format-Number $window.endSeconds) s | $($window.samples) | $(Format-Number $window.averageMs) ms | $(Format-Number $window.p50Ms) ms | $(Format-Number $window.p95Ms) ms | $(Format-Number $window.p99Ms) ms | $(Format-Number $window.maximumMs) ms |")
+    }
+}
+$markdown.Add("")
 $markdown.Add("## Logged input-to-present latency")
 $markdown.Add("")
 $markdown.Add("| Samples | Average | p50 | p95 | p99 | Maximum |")
@@ -600,6 +657,7 @@ Write-Host "Label: $TestLabel"
 Write-Host "Active media estimate: $(Format-Number $clientActiveSeconds) s"
 Write-Host "Video dropped/superseded: $([long]$videoDropped) / $([long]$videoSuperseded)"
 Write-Host "Audio dropped/underflows: $([long]$audioDropped) / $([long]$audioUnderflows)"
+Write-Host "Audio arrival average/p95/p99/max: $(Format-Number $audioArrivalStatistics.average) / $(Format-Number $audioArrivalStatistics.p95) / $(Format-Number $audioArrivalStatistics.p99) / $(Format-Number $audioArrivalStatistics.maximum) ms"
 Write-Host "Latency average/p95/max: $(Format-Number $totalLatency.average) / $(Format-Number $totalLatency.p95) / $(Format-Number $totalLatency.maximum) ms"
 Write-Host "JSON: $jsonPath"
 Write-Host "Markdown: $markdownPath"

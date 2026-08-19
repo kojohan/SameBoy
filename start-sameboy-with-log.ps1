@@ -177,6 +177,17 @@ function Copy-VerifiedLogDirectory {
     Move-Item -LiteralPath $copyingDirectory -Destination $DestinationDirectory
 }
 
+function Test-UsableNetworkAdapter {
+    param([AllowNull()][object]$Adapter)
+
+    if ($null -eq $Adapter -or $Adapter.Status -ne "Up") {
+        return $false
+    }
+    $linkSpeed = [string]$Adapter.LinkSpeed
+    return -not [string]::IsNullOrWhiteSpace($linkSpeed) -and
+           $linkSpeed -notmatch '^\s*0(?:[.,]0+)?(?:\s|$)'
+}
+
 function Get-PrimaryNetworkMetadata {
     $metadata = [ordered]@{
         Interface = "unknown"
@@ -188,19 +199,58 @@ function Get-PrimaryNetworkMetadata {
     }
 
     try {
-        $defaultRoute = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" -ErrorAction Stop |
-            Where-Object { $_.State -eq "Alive" -or $_.State -eq $null } |
-            Sort-Object RouteMetric, InterfaceMetric |
-            Select-Object -First 1
+        $defaultRoute = $null
         $adapter = $null
-        if ($null -ne $defaultRoute) {
-            $adapter = Get-NetAdapter -InterfaceIndex $defaultRoute.InterfaceIndex -ErrorAction Stop
+        $addresses = @()
+        $routes = @(Get-NetRoute -AddressFamily IPv4 `
+                                -DestinationPrefix "0.0.0.0/0" `
+                                -PolicyStore ActiveStore `
+                                -ErrorAction Stop |
+            Sort-Object @{ Expression = {
+                [long]$_.RouteMetric + [long]$_.InterfaceMetric
+            } })
+        foreach ($route in $routes) {
+            $candidate = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex `
+                                        -ErrorAction SilentlyContinue
+            if (-not (Test-UsableNetworkAdapter -Adapter $candidate)) {
+                continue
+            }
+            $candidateAddresses = @(Get-NetIPAddress -InterfaceIndex $candidate.ifIndex `
+                                                     -AddressFamily IPv4 `
+                                                     -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike "169.254.*" } |
+                Select-Object -ExpandProperty IPAddress)
+            if ($candidateAddresses.Count -eq 0) {
+                continue
+            }
+            $defaultRoute = $route
+            $adapter = $candidate
+            $addresses = $candidateAddresses
+            break
         }
         if ($null -eq $adapter) {
-            $adapter = Get-NetAdapter -ErrorAction Stop |
-                Where-Object { $_.Status -eq "Up" } |
-                Sort-Object ifIndex |
-                Select-Object -First 1
+            $connectedInterfaces = @(Get-NetIPInterface -AddressFamily IPv4 `
+                                                        -ConnectionState Connected `
+                                                        -ErrorAction Stop |
+                Sort-Object InterfaceMetric)
+            foreach ($interface in $connectedInterfaces) {
+                $candidate = Get-NetAdapter -InterfaceIndex $interface.InterfaceIndex `
+                                            -ErrorAction SilentlyContinue
+                if (-not (Test-UsableNetworkAdapter -Adapter $candidate)) {
+                    continue
+                }
+                $candidateAddresses = @(Get-NetIPAddress -InterfaceIndex $candidate.ifIndex `
+                                                         -AddressFamily IPv4 `
+                                                         -ErrorAction SilentlyContinue |
+                    Where-Object { $_.IPAddress -notlike "169.254.*" } |
+                    Select-Object -ExpandProperty IPAddress)
+                if ($candidateAddresses.Count -eq 0) {
+                    continue
+                }
+                $adapter = $candidate
+                $addresses = $candidateAddresses
+                break
+            }
         }
         if ($null -eq $adapter) {
             return [pscustomobject]$metadata
@@ -216,10 +266,6 @@ function Get-PrimaryNetworkMetadata {
         else {
             [string]$adapter.MediaType
         }
-        $addresses = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -notlike "169.254.*" } |
-            Select-Object -ExpandProperty IPAddress)
-
         $metadata.Interface = [string]$adapter.Name
         $metadata.Description = [string]$adapter.InterfaceDescription
         $metadata.Medium = $medium
