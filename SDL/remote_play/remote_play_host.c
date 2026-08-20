@@ -28,6 +28,23 @@ static void reset_audio_queue(RemotePlayHost *host)
     host->audio_queue_count = 0;
 }
 
+static void reset_remote_client_state(RemotePlayHost *host)
+{
+    multiplayer_input_apply_button_mask(host->session, 0);
+    host->last_sequence = 0;
+    host->last_buttons = 0;
+    host->last_receive_time_us = 0;
+    host->last_input_gap_us = 0;
+    host->changed_input_sequence = 0;
+    host->client_input_event_timestamp_us = 0;
+    host->client_input_send_timestamp_us = 0;
+    host->host_input_receive_timestamp_us = 0;
+    host->host_input_apply_timestamp_us = 0;
+    host->has_sequence = false;
+    host->client_connected = false;
+    reset_audio_queue(host);
+}
+
 static const char *handshake_status_name(RemotePlayHandshakeStatus status)
 {
     switch (status) {
@@ -102,16 +119,24 @@ void remote_play_host_poll(RemotePlayHost *host)
             }
 
             if (status == REMOTE_PLAY_HANDSHAKE_ACCEPTED) {
-                bool peer_changed = !host->handshake_complete ||
+                bool initial_client = !host->handshake_complete;
+                bool request_changed = host->handshake_complete &&
+                    hello.request_id != host->client_request_id;
+                bool endpoint_changed = host->handshake_complete &&
                     !remote_udp_endpoint_equal(&sender, &host->transport.peer);
-                if (peer_changed && host->client_connected) {
-                    multiplayer_input_apply_button_mask(host->session, 0);
-                    host->last_buttons = 0;
-                    host->client_connected = false;
-                    host->has_sequence = false;
-                    reset_audio_queue(host);
+                bool client_changed = initial_client || request_changed || endpoint_changed;
+                if (client_changed) {
+                    reset_remote_client_state(host);
+                    host->client_connected_notice_pending = false;
+                    host->client_disconnected_notice_pending = false;
+                    sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
+                                     "remote_handshake_host client_generation_changed initial=%s request_changed=%s endpoint_changed=%s",
+                                     initial_client ? "yes" : "no",
+                                     request_changed ? "yes" : "no",
+                                     endpoint_changed ? "yes" : "no");
                 }
                 remote_udp_set_peer(&host->transport, &sender);
+                host->client_request_id = hello.request_id;
                 host->handshake_complete = true;
             }
 

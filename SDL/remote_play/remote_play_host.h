@@ -32,6 +32,7 @@ typedef struct {
     uint64_t handshake_requests;
     uint64_t handshake_responses;
     uint64_t host_id;
+    uint64_t client_request_id;
     uint64_t last_video_sequence;
     uint64_t video_stream_sequence;
     uint64_t video_frames_sent;

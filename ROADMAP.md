@@ -93,7 +93,7 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
-**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable media baseline. Protocol v6 retains that media behavior and adds a handshake/status layer; automated verification passes and a physical v6 run remains. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable media baseline. Protocol v6 retains that media behavior and adds a handshake/status layer; automated verification and physical two-PC connection-notice/bidirectional-reconnect tests pass. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
 
 **Goal:** provide good image quality without adding unnecessary latency.
 

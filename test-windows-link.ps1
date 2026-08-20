@@ -64,6 +64,31 @@ function Wait-LogPattern {
     throw "$Description timed out after $Timeout seconds. See $Path"
 }
 
+function Wait-LogPatternCount {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Pattern,
+        [Parameter(Mandatory)][int]$Count,
+        [Parameter(Mandatory)][string]$Description,
+        [Parameter(Mandatory)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory)][int]$Timeout
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($Timeout)
+    do {
+        if ([regex]::Matches((Read-Log -Path $Path), $Pattern).Count -ge $Count) {
+            return
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            throw "$Description failed: process $($Process.Id) exited with code $($Process.ExitCode). See $Path"
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "$Description timed out after $Timeout seconds. See $Path"
+}
+
 function Assert-LogPattern {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -456,6 +481,170 @@ function Invoke-RemoteHandshakeDiagnostics {
     }
 }
 
+function Invoke-RemoteReconnect {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)][uint32]$TestSessionId
+    )
+
+    Write-Host "[RUN ] remote-reconnect"
+    Assert-PortAvailable -Port $Port
+    $hostTest = $null
+    $firstClientTest = $null
+    $secondClientTest = $null
+    try {
+        $hostArguments = @(
+            "--remote-input-host", $Port.ToString(),
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-host-view", "p1",
+            $script:QuotedRomPath
+        )
+        $hostTest = Start-SameBoyTestProcess -Name "remote-reconnect-host" `
+                                             -Arguments $hostArguments
+        Wait-LogPattern -Path $hostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port" `
+                        -Description "reconnect host startup" `
+                        -Process $hostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $clientArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $TestSessionId.ToString()
+        )
+        $firstClientTest = Start-SameBoyTestProcess -Name "remote-reconnect-first-client" `
+                                                    -Arguments $clientArguments
+        Wait-LogPattern -Path $firstClientTest.StderrPath `
+                        -Pattern "remote_video_client first_frame=" `
+                        -Description "first client video" `
+                        -Process $firstClientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Stop-TestProcess -Process $firstClientTest.Process
+        Wait-LogPattern -Path $hostTest.StderrPath `
+                        -Pattern "remote_host_notice text=player_2_disconnected" `
+                        -Description "host disconnect before rejoin" `
+                        -Process $hostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $secondClientTest = Start-SameBoyTestProcess -Name "remote-reconnect-second-client" `
+                                                     -Arguments $clientArguments
+        Wait-LogPattern -Path $secondClientTest.StderrPath `
+                        -Pattern "remote_video_client first_frame=" `
+                        -Description "rejoined client video" `
+                        -Process $secondClientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Wait-LogPatternCount -Path $hostTest.StderrPath `
+                             -Pattern "remote_input_host client_active first_sequence=1" `
+                             -Count 2 `
+                             -Description "host second client activation from sequence 1" `
+                             -Process $hostTest.Process `
+                             -Timeout $TimeoutSeconds
+        Assert-LogPattern -Path $secondClientTest.StderrPath `
+                          -Pattern "remote_handshake_client status=connected client_protocol=6 host_protocol=6" `
+                          -Description "rejoined client handshake"
+        Assert-NoFatalLog -Paths @($hostTest.StderrPath,
+                                   $firstClientTest.StderrPath,
+                                   $secondClientTest.StderrPath)
+        Write-Host "[PASS] remote-reconnect"
+    }
+    finally {
+        if ($secondClientTest) {
+            Stop-TestProcess -Process $secondClientTest.Process
+        }
+        if ($firstClientTest) {
+            Stop-TestProcess -Process $firstClientTest.Process
+        }
+        if ($hostTest) {
+            Stop-TestProcess -Process $hostTest.Process
+        }
+    }
+}
+
+function Invoke-RemoteHostReconnect {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [Parameter(Mandatory)][uint32]$TestSessionId
+    )
+
+    Write-Host "[RUN ] remote-host-reconnect"
+    Assert-PortAvailable -Port $Port
+    $firstHostTest = $null
+    $secondHostTest = $null
+    $clientTest = $null
+    try {
+        $hostArguments = @(
+            "--remote-input-host", $Port.ToString(),
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-host-view", "p1",
+            $script:QuotedRomPath
+        )
+        $firstHostTest = Start-SameBoyTestProcess -Name "remote-host-reconnect-first-host" `
+                                                    -Arguments $hostArguments
+        Wait-LogPattern -Path $firstHostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port" `
+                        -Description "first reconnect host startup" `
+                        -Process $firstHostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $clientArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $TestSessionId.ToString()
+        )
+        $clientTest = Start-SameBoyTestProcess -Name "remote-host-reconnect-client" `
+                                               -Arguments $clientArguments
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_video_client host_generation_first_frame=.*generation=1" `
+                        -Description "first host video" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        Stop-TestProcess -Process $firstHostTest.Process
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_client_notice text=player_1_disconnected" `
+                        -Description "client waiting after first host stops" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Assert-PortAvailable -Port $Port
+
+        $secondHostTest = Start-SameBoyTestProcess -Name "remote-host-reconnect-second-host" `
+                                                   -Arguments $hostArguments
+        Wait-LogPattern -Path $secondHostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port" `
+                        -Description "second reconnect host startup" `
+                        -Process $secondHostTest.Process `
+                        -Timeout $TimeoutSeconds
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_handshake_client host_generation_changed generation=2 initial=no" `
+                        -Description "client second host generation" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_video_client host_generation_first_frame=.*generation=2" `
+                        -Description "second host video" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Assert-LogPattern -Path $secondHostTest.StderrPath `
+                          -Pattern "remote_input_host client_active first_sequence=[1-9][0-9]*" `
+                          -Description "second host input reception"
+        Assert-NoFatalLog -Paths @($firstHostTest.StderrPath,
+                                   $secondHostTest.StderrPath,
+                                   $clientTest.StderrPath)
+        Write-Host "[PASS] remote-host-reconnect"
+    }
+    finally {
+        if ($clientTest) {
+            Stop-TestProcess -Process $clientTest.Process
+        }
+        if ($secondHostTest) {
+            Stop-TestProcess -Process $secondHostTest.Process
+        }
+        if ($firstHostTest) {
+            Stop-TestProcess -Process $firstHostTest.Process
+        }
+    }
+}
+
 $script:RepositoryRoot = $PSScriptRoot
 $resolvedRom = Resolve-Path -LiteralPath $RomPath -ErrorAction Stop
 $script:Executable = Join-Path $script:RepositoryRoot "build\bin\SDL\sameboy.exe"
@@ -503,6 +692,10 @@ try {
                           -StopHostFirst
     Invoke-RemoteHandshakeDiagnostics -Port ($BasePort + 2) `
                                       -TestSessionId ($SessionId + 2)
+    Invoke-RemoteReconnect -Port ($BasePort + 3) `
+                           -TestSessionId ($SessionId + 3)
+    Invoke-RemoteHostReconnect -Port ($BasePort + 4) `
+                               -TestSessionId ($SessionId + 4)
 
     Write-Host ""
     Write-Host "All SameBoy Link Windows smoke tests passed."

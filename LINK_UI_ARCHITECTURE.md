@@ -2,9 +2,9 @@
 
 This document defines the target user-facing architecture for SameBoy Link. It is the design contract for the frontend work that replaces the current developer command-line modes with normal SameBoy UI flows.
 
-## Implementation status — 2026-08-18
+## Implementation status — 2026-08-20
 
-The first direct-IP implementation of this contract and its physical two-PC four-mode regression are complete. The SDL frontend has explicit session modes, a `Link` menu, persistent independent P1/P2 keyboard/controller mappings, menu-driven Local Link/Host/Join/Disconnect and retained CLI regression paths. Join prompts for `IP:port`; port, session ID and host presentation settings persist. Protocol v6 now gives Remote Client a visible pre-frame connection state and explicit session/protocol mismatch feedback; Direct/Relay labeling remains future work.
+The first direct-IP implementation of this contract, its physical two-PC four-mode regression and its protocol-v6 bidirectional reconnect lifecycle are complete. The SDL frontend has explicit session modes, a `Link` menu, persistent independent P1/P2 keyboard/controller mappings, menu-driven Local Link/Host/Join/Disconnect and retained CLI regression paths. Join prompts for `IP:port`; port, session ID and host presentation settings persist. Protocol v6 now gives Remote Client a visible pre-frame connection state and explicit session/protocol mismatch feedback; Direct/Relay labeling remains future work.
 
 Successful Remote Play connection is also acknowledged in context: P1 sees
 `Player 2 connected` on the local gameplay image and P2 sees
@@ -13,6 +13,14 @@ presentation notices rather than text transported inside the video stream.
 The inverse notices appear on connection loss: P1 sees
 `Player 2 disconnected`; P2 briefly sees `Player 1 disconnected` over the last
 frame before returning to the full-window waiting state.
+Temporary connection loss can recover in place. If P2 deliberately disconnects
+and joins again, the host recognizes the new handshake request as a fresh client
+generation, clears stale P2 input and resumes gameplay without requiring P1 to
+restart its hosted session.
+The reverse transition is also supported: P2 may remain in its waiting state
+while P1 disconnects and hosts again. A changed host ID resets P2's old media
+generation, and gameplay replaces the status screen only when the new host's
+first complete frame arrives.
 
 Remote Client uses the same executable without a local Game Boy core. Escape opens a client-specific SameBoy menu for scaling, the complete SameBoy OpenGL shader/filter set, window size/fullscreen, volume/mute and P2 keyboard/controller configuration. Disconnect releases its network/audio/video resources and returns to the ordinary idle frontend. Systems without a usable OpenGL 3.2 context retain a nearest/bilinear SDL renderer fallback.
 

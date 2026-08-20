@@ -184,7 +184,7 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [ ] Compatibility matrix.
 - [x] Exportable diagnostic logs.
 - [ ] Windows packaging.
-- [x] Automated one-PC Windows smoke/regression test for single-player, Local Link, OpenGL/SDL Remote Play loopback and handshake error paths.
+- [x] Automated one-PC Windows smoke/regression test for single-player, Local Link, OpenGL/SDL Remote Play loopback, handshake error paths and reconnect in both directions without restarting the remaining peer.
 - [x] Contributor/development setup notes.
 
 ## Optional later — Native NetLink

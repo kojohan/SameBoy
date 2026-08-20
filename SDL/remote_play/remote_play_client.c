@@ -94,6 +94,7 @@ typedef enum {
 typedef struct {
     uint64_t request_id;
     uint64_t host_id;
+    uint64_t host_generation;
     uint64_t first_send_timestamp_us;
     uint64_t last_send_timestamp_us;
     uint64_t last_response_timestamp_us;
@@ -110,6 +111,7 @@ typedef struct {
     uint64_t completed_sequence;
     uint64_t highest_seen_sequence;
     uint64_t frames_completed;
+    uint64_t generation_frames_completed;
     uint64_t frames_dropped;
     uint64_t packets_rejected;
     uint64_t raw_bytes_completed;
@@ -177,6 +179,44 @@ typedef struct {
     bool playing;
     bool open_failed;
 } RemoteAudioReceiver;
+
+static void reset_remote_video_generation(RemoteVideoReceiver *video)
+{
+    memset(video->chunks_received, 0, sizeof(video->chunks_received));
+    video->assembling_sequence = 0;
+    video->completed_sequence = 0;
+    video->highest_seen_sequence = 0;
+    video->assembling_width = 0;
+    video->assembling_height = 0;
+    video->assembling_chunk_count = 0;
+    video->received_chunk_count = 0;
+    video->assembling_frame_size = 0;
+    video->generation_frames_completed = 0;
+    video->has_assembly = false;
+    video->frame_ready = false;
+}
+
+static void reset_remote_audio_generation(RemoteAudioReceiver *audio)
+{
+    if (audio->device) SDL_LockAudioDevice(audio->device);
+    audio->ring_read_frame = 0;
+    audio->ring_write_frame = 0;
+    audio->buffered_frames = 0;
+    audio->last_sequence = 0;
+    audio->last_packet_receive_us = 0;
+    audio->resample_phase = 0;
+    audio->rate_correction = 0;
+    audio->has_sequence = false;
+    audio->playing = false;
+    if (audio->device) SDL_UnlockAudioDevice(audio->device);
+}
+
+static void reset_remote_clock_generation(RemoteClockSync *clock_sync)
+{
+    uint32_t sequence = clock_sync->sequence;
+    memset(clock_sync, 0, sizeof(*clock_sync));
+    clock_sync->sequence = sequence;
+}
 
 static uint64_t monotonic_time_us(void)
 {
@@ -1194,7 +1234,6 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             response.session_id == session_id &&
             response.request_id == handshake->request_id) {
             handshake->host_protocol_version = response.protocol_version;
-            handshake->host_id = response.host_id;
             handshake->last_response_timestamp_us = receive_timestamp_us;
             if (response.status == REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH) {
                 set_connection_status(handshake, REMOTE_CLIENT_SESSION_MISMATCH);
@@ -1204,6 +1243,20 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
                 set_connection_status(handshake, REMOTE_CLIENT_PROTOCOL_MISMATCH);
             }
             else {
+                bool initial_host = !handshake->host_id;
+                bool host_changed = handshake->host_id &&
+                    response.host_id != handshake->host_id;
+                if (initial_host || host_changed) {
+                    reset_remote_video_generation(video);
+                    reset_remote_audio_generation(audio);
+                    reset_remote_clock_generation(clock_sync);
+                    handshake->host_id = response.host_id;
+                    handshake->host_generation++;
+                    fprintf(stderr,
+                            "[SameBoy Link][frontend] remote_handshake_client host_generation_changed generation=%llu initial=%s\n",
+                            (unsigned long long)handshake->host_generation,
+                            initial_host? "yes" : "no");
+                }
                 set_connection_status(handshake, REMOTE_CLIENT_CONNECTED);
             }
             continue;
@@ -1303,6 +1356,7 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             }
             video->frame_ready = true;
             video->frames_completed++;
+            video->generation_frames_completed++;
             uint64_t receive_span_us =
                 video->completed_telemetry.client_last_receive_timestamp_us -
                 video->completed_telemetry.client_first_receive_timestamp_us;
@@ -1316,6 +1370,12 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             video->raw_bytes_completed +=
                 (uint64_t)video->completed_width * video->completed_height * 4;
             video->encoded_bytes_completed += video->assembling_frame_size;
+            if (video->generation_frames_completed == 1) {
+                fprintf(stderr,
+                        "[SameBoy Link][video] remote_video_client host_generation_first_frame=%llu generation=%llu\n",
+                        (unsigned long long)video->completed_sequence,
+                        (unsigned long long)handshake->host_generation);
+            }
             if (video->frames_completed == 1) {
                 fprintf(stderr,
                         "[SameBoy Link][video] remote_video_client first_frame=%llu size=%ux%u encoded_bytes=%u chunks=%u format=%s\n",
@@ -1813,6 +1873,7 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     }
 
     RemoteClientConnectionStatus displayed_status = REMOTE_CLIENT_CONNECTING;
+    uint64_t displayed_host_generation = 0;
     bool connection_needs_new_frame = true;
     uint64_t connection_notice_until_us = 0;
     const char *connection_notice_text = NULL;
@@ -1986,6 +2047,14 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
         bool connection_notice_frame_updated = false;
         SDL_LockMutex(network_mutex);
         RemoteClientHandshake display_handshake = handshake;
+        bool host_generation_changed =
+            display_handshake.host_generation != displayed_host_generation;
+        if (host_generation_changed) {
+            displayed_host_generation = display_handshake.host_generation;
+            memset(&latency, 0, sizeof(latency));
+            video_available = false;
+            connection_needs_new_frame = true;
+        }
         if (display_handshake.status != displayed_status) {
             RemoteClientConnectionStatus previous_status = displayed_status;
             displayed_status = display_handshake.status;
@@ -2012,6 +2081,16 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
             else {
                 connection_needs_new_frame = true;
             }
+            render_needed = true;
+        }
+        else if (host_generation_changed &&
+                 displayed_status == REMOTE_CLIENT_CONNECTED) {
+            connection_notice_text = "Player 1 connected";
+            connection_notice_until_us = monotonic_time_us() +
+                                         CONNECTION_NOTICE_DURATION_US;
+            fprintf(stderr,
+                    "[SameBoy Link][frontend] remote_client_notice text=player_1_connected duration_ms=%u\n",
+                    CONNECTION_NOTICE_DURATION_US / 1000);
             render_needed = true;
         }
         if (video.frame_ready &&

@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v6 adds an explicit connection handshake and visible waiting/session/protocol status while retaining protocol v5's physically verified low-latency media path. The v5 path is playable over Ethernet and Wi-Fi and passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v6 adds an explicit connection handshake and visible waiting/session/protocol status while retaining protocol v5's physically verified low-latency media path. Its connection notices and bidirectional peer-reconnect lifecycle are physically verified on two PCs. The v5 path is playable over Ethernet and Wi-Fi and passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -102,9 +102,14 @@ session-mismatch, protocol-mismatch and `Connected` states. When play begins,
 P1 briefly sees `Player 2 connected` and P2 sees `Player 1 connected` directly
 on their respective gameplay images. If either peer disappears, the remaining
 player receives the corresponding `Player 2 disconnected` or
-`Player 1 disconnected` notice; P2 then transitions to `Waiting for host`. It retains protocol
-v5's media formats and reduced lossless-video datagram count without adding a
-frame queue; repeated Wi-Fi/Wi-Fi v5 play is the accepted media baseline. Bounded client-side audio
+`Player 1 disconnected` notice; P2 then transitions to `Waiting for host` and
+automatically resumes if the same connection returns. Disconnecting P2 and
+joining again also works without restarting the host: each new client request
+starts a fresh input-sequence generation and releases any old held buttons. If
+P1 disconnects and hosts again, the still-running P2 recognizes the new host,
+clears stale video/audio sequence state and resumes on the first fresh frame.
+It retains protocol v5's media formats and reduced lossless-video datagram count
+without adding a frame queue; repeated Wi-Fi/Wi-Fi v5 play is the accepted media baseline. Bounded client-side audio
 arrival histograms now provide session and ten-second p50/p95/p99 measurements
 without per-packet logging. A physical Wi-Fi/Wi-Fi verification had no audible
 audio faults, so the current low-latency PCM settings remain unchanged. The next

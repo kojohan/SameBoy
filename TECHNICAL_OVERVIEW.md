@@ -4,7 +4,7 @@ This document is the high-level technical introduction for contributors. For the
 
 ## Current snapshot — 2026-08-19
 
-The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v6 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the protocol-v5 lossless native-framebuffer/adaptive-PCM media path. Protocol v6 retains that path and adds an explicit pre-media handshake plus visible connection and mismatch status; automated loopback and negative-path tests pass, while a physical v6 run remains pending. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Adaptive-PCM tuning, optional lower-bandwidth video, authentication, encryption and production-grade Internet connectivity remain planned work.
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v6 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the protocol-v5 lossless native-framebuffer/adaptive-PCM media path. Protocol v6 retains that path and adds an explicit pre-media handshake plus visible connection and mismatch status; automated loopback/negative-path tests and physical two-PC connection-notice/bidirectional-reconnect tests pass. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Adaptive-PCM tuning, optional lower-bandwidth video, authentication, encryption and production-grade Internet connectivity remain planned work.
 
 ## 1. Why SameBoy
 
@@ -211,6 +211,24 @@ P2 overlays `Player 1 disconnected` on the last locally copied gameplay frame
 for two seconds and then replaces it with `Waiting for host`. A later accepted
 handshake and fresh frame show the connected notice again. These transitions
 are presentation-only and do not preserve or replay stale input.
+
+The host distinguishes temporary transport loss from a newly launched/joined
+client by the handshake request ID and UDP endpoint. The same client generation
+keeps its monotonically increasing input sequence across a temporary outage. A
+new generation clears the old button mask, input timestamps, sequence baseline
+and queued audio before accepting its first input packet. This lets P2 use
+Disconnect followed by Join again without restarting P1, including when Windows
+reuses the same local UDP endpoint, while still rejecting stale/reordered input
+inside one client generation.
+
+The reciprocal lifetime is identified by the non-zero host ID in each accepted
+response. If P1 ends its hosted session and starts hosting again at the same
+address, the continuing P2 detects the new host generation and resets only its
+generation-bound video, audio and clock state. Incomplete video assembly and
+the audio ring buffer are discarded, sequence gates accept the new streams from
+their first packets, and accumulated application/session state remains alive.
+P2 therefore leaves the waiting screen on the first fresh frame without needing
+to disconnect or restart itself.
 
 Clock checkpoints and input-to-present samples also carry client elapsed time.
 Schema-v4 reports group smoothed RTT/jitter plus video-network and total latency

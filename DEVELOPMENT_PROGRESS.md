@@ -921,3 +921,58 @@ notices. The OpenGL host recorded its input timeout followed by
 `build/regression/automated-20260819-210959-2820`. The verified complete
 connection-lifecycle runtime was published as
 `M:\SAME-LINKTEST\builds\handshake-v6-peer-lifecycle`.
+
+### Bidirectional peer reconnect without restarting the remaining side
+
+A physical menu test exposed a generation-lifetime bug: after P2 selected
+Disconnect and joined the still-running host again, the new client reached the
+accepted handshake and displayed `Player 1 connected`, but received no gameplay
+frames. The old client input sequence remained on the host while the newly
+launched P2 began again at sequence 1, so every new input packet was rejected as
+stale and media activation never resumed.
+
+The host now tracks the accepted handshake request ID as well as its UDP
+endpoint. Repeated handshakes from the same client preserve sequence continuity
+across a temporary outage. A new request ID or endpoint starts a fresh client
+generation: it releases all P2 buttons, resets input timing and sequence state,
+and clears queued client audio before accepting new input. This also handles an
+OS-reused source port and does not weaken newest-sequence-wins checks within one
+generation.
+
+The regression suite now has a sixth path, `remote-reconnect`. It keeps one host
+alive, launches P2, waits for video, terminates P2, verifies the host disconnect
+notice, launches a second P2 and requires both a new first video frame and a
+second host activation at input sequence 1. The warnings-as-errors build and all
+six paths passed; logs are in
+`build/regression/automated-20260820-171127-5984`. The matching two-PC test
+runtime was published separately as
+`M:\SAME-LINKTEST\builds\protocol-v6-reconnect`.
+
+The reciprocal physical menu test then exposed the same lifetime assumption on
+P2. When P1 selected Disconnect and hosted again, the continuing client accepted
+the new handshake but retained the previous host's completed video and audio
+sequence numbers. Because the restarted host began both streams again at low
+sequence values, P2 rejected them and remained on the text-only connected frame.
+
+P2 now treats a changed handshake host ID as a new host generation. It discards
+incomplete video assembly, clears the completed/highest video sequence gates,
+empties the audio ring and resets audio and clock sequence state. The ordinary
+client process, controls and input sequence remain alive. Presentation waits for
+the first complete frame from the new generation, then shows `Player 1
+connected` over gameplay rather than leaving the black status frame visible.
+
+A seventh regression path, `remote-host-reconnect`, keeps one P2 running while
+it stops the first host and starts a second host on the same UDP port and session
+ID. It verifies `Waiting`, the disconnect notice, host generation 2, accepted
+continuing input and an actual generation-2 video frame at video sequence 1.
+All seven paths and the warnings-as-errors build passed; logs are in
+`build/regression/automated-20260820-172103-19520`. The bidirectional reconnect
+runtime was published as
+`M:\SAME-LINKTEST\builds\protocol-v6-bidirectional-reconnect`.
+
+The subsequent physical two-PC verification passed with that runtime. P2 could
+disconnect and join the still-running P1 again, and P1 could disconnect and host
+again while the same P2 client remained open. In both directions the expected
+disconnect/connected notices appeared and gameplay resumed instead of remaining
+on the black text-only connected frame. This closes the physical protocol-v6
+peer-lifecycle and bidirectional reconnect gate.
