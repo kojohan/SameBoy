@@ -17,7 +17,9 @@ $runtimeSource = Join-Path $repositoryRoot "build\bin\SDL"
 $sharedLauncherSource = Join-Path $repositoryRoot "run-shared-windows-build.ps1"
 $loggingLauncherSources = @(
     (Join-Path $repositoryRoot "start-sameboy-with-log.cmd"),
-    (Join-Path $repositoryRoot "start-sameboy-with-log.ps1")
+    (Join-Path $repositoryRoot "start-sameboy-with-log.ps1"),
+    (Join-Path $repositoryRoot "start-performance-baseline.cmd"),
+    (Join-Path $repositoryRoot "start-performance-baseline.ps1")
 )
 
 if (-not $SkipBuild) {

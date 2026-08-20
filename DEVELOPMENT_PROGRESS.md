@@ -976,3 +976,17 @@ again while the same P2 client remained open. In both directions the expected
 disconnect/connected notices appeared and gameplay resumed instead of remaining
 on the black text-only connected frame. This closes the physical protocol-v6
 peer-lifecycle and bidirectional reconnect gate.
+
+### Fixed-role performance-matrix launcher
+
+With physical protocol-v6 lifecycle verification complete, the next evidence
+gate is three five-minute repetitions for each fixed-role Ethernet/Ethernet and
+Ethernet/Wi-Fi setup. `start-performance-baseline.cmd` now provides one
+double-click entry point on both PCs. It selects one of the three documented
+machine/network role assignments plus repetition 1-3, derives the same bounded
+test label on both machines and delegates to the existing local-first diagnostic
+launcher. Actual role, active adapter, executable hash and unique launch ID are
+still detected independently, and completed logs are copied to the NAS only
+after shutdown. Published builds now include both baseline-launcher files.
+The clean matrix runtime and tooling bundle is published as
+`M:\SAME-LINKTEST\builds\protocol-v6-baseline-matrix-v2`.

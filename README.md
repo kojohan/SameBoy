@@ -64,6 +64,13 @@ Until room codes and automatic connectivity are implemented:
 
 Internet testing currently requires manual UDP forwarding of the selected host port. Only the host needs the ROM.
 
+For the fixed-role performance matrix, start
+`start-performance-baseline.cmd` from the same published build on both PCs.
+Choose the same setup and repetition on both sides, then follow the displayed
+Host/Join roles and play for at least five minutes. The ordinary diagnostic
+launcher records locally during play and exports uniquely named, matching test
+labels to the shared `LOGS` root after normal shutdown.
+
 ## Streaming goals
 
 The remote client receives Player 2's **native Game Boy framebuffer**, not a pre-scaled desktop capture.

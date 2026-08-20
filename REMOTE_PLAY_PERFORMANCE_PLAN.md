@@ -348,6 +348,13 @@ public-facing Internet release.
 ## Recommended implementation order
 
 1. Complete the remaining fixed-role Ethernet/Wi-Fi baseline repetitions using the physically verified schema-v4 timing windows.
-2. Physically verify protocol v6's handshake while retaining the accepted protocol-v5 media baseline; revisit PCM, priority scheduling or chunk pacing only if an audible, visible or repeatable measurable need appears.
+2. Compare the matrix against the P0-P3 gates; revisit PCM, priority scheduling or chunk pacing only if an audible, visible or repeatable measurable need appears.
 3. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
 4. Run controlled impairment and longer Internet regressions.
+
+Protocol v6's handshake, peer notices and reconnect lifecycle have now passed
+physical two-PC testing. Use the clean `protocol-v6-baseline-matrix-v2` build and
+start `start-performance-baseline.cmd` on both machines for the next matrix.
+Choose the same setup and repetition on each machine; the launcher generates a
+matching test label while the existing logger records the actual role, network
+adapter, executable hash and unique launch ID independently.

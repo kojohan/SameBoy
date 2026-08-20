@@ -84,7 +84,10 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Complete an extended 7.5-minute Wi-Fi/Wi-Fi schema-v4 baseline.
 - [ ] Add sender queue-age windows only if a sender queue is implemented; no such queue exists in the accepted baseline.
 - [x] Count frames actually presented separately from completed and superseded frames.
-- [ ] Run three five-minute repetitions for both-Ethernet and fixed-role Ethernet/Wi-Fi baselines.
+- [ ] Run the fixed-role five-minute performance matrix with the clean protocol-v6 build.
+  - [ ] Three repetitions: desktop Ethernet host -> laptop Ethernet client.
+  - [ ] Three repetitions: desktop Ethernet host -> laptop Wi-Fi client.
+  - [ ] Three repetitions: laptop Wi-Fi host -> desktop Ethernet client.
 - [ ] Add a bounded priority sender scheduler: input/clock, then audio, then video.
 - [x] Add a zero-buffer 1,280-byte video payload experiment with host burst and client receive-span telemetry.
 - [x] Present P1-only Local Link/Remote Host from the latched complete framebuffer to prevent mixed-frame seams.
