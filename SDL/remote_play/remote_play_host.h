@@ -33,6 +33,8 @@ typedef struct {
     uint64_t handshake_responses;
     uint64_t host_id;
     uint64_t client_request_id;
+    uint8_t authentication_key[REMOTE_PLAY_AUTH_KEY_SIZE];
+    uint8_t host_nonce[REMOTE_PLAY_AUTH_NONCE_SIZE];
     uint64_t last_video_sequence;
     uint64_t video_stream_sequence;
     uint64_t video_frames_sent;
@@ -70,12 +72,16 @@ typedef struct {
     bool client_connected;
     bool client_connected_notice_pending;
     bool client_disconnected_notice_pending;
+    bool authentication_enabled;
+    bool automatic_pairing;
 } RemotePlayHost;
 
 bool remote_play_host_start(RemotePlayHost *host,
                             GameSession *session,
                             uint16_t port,
                             uint32_t session_id,
+                            const char *key_hex,
+                            bool automatic_pairing,
                             char *error,
                             size_t error_size);
 void remote_play_host_poll(RemotePlayHost *host);

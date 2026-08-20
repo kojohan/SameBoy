@@ -24,6 +24,9 @@ bool remote_udp_open_client(RemoteUdpSocket *transport,
                             const char *endpoint,
                             char *error,
                             size_t error_size);
+bool remote_udp_get_local_ipv4_endpoint(char *endpoint,
+                                        size_t endpoint_size,
+                                        uint16_t port);
 int remote_udp_receive(RemoteUdpSocket *transport,
                        uint8_t *data,
                        size_t capacity,

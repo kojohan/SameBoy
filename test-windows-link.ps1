@@ -220,6 +220,7 @@ function Invoke-RemoteLoopback {
         $hostArguments = @(
             "--remote-input-host", $Port.ToString(),
             "--remote-session", $TestSessionId.ToString(),
+            "--remote-auto-pair",
             "--remote-host-view", "p1",
             $script:QuotedRomPath
         )
@@ -267,6 +268,12 @@ function Invoke-RemoteLoopback {
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_input_host client_active first_sequence=1" `
                           -Description "$Name host input reception"
+        Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_input_host listening_udp_port=$Port .*auth=enabled pairing=automatic" `
+                          -Description "$Name automatic-pairing host"
+        Assert-LogPattern -Path $clientTest.StderrPath `
+                          -Pattern "remote_handshake_client status=pairing client_protocol=8 host_protocol=8" `
+                          -Description "$Name automatic client pairing"
         Assert-LogPattern -Path $hostTest.StderrPath `
                           -Pattern "remote_host_notice text=player_2_connected duration_frames=120" `
                           -Description "$Name Player 2 host notice"
@@ -362,6 +369,7 @@ function Invoke-RemoteHandshakeDiagnostics {
     Assert-PortAvailable -Port $Port
     $hostTest = $null
     $clientTest = $null
+    $secondClientTest = $null
     $probe = $null
     try {
         $waitingArguments = @(
@@ -372,7 +380,7 @@ function Invoke-RemoteHandshakeDiagnostics {
         $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-waiting-client" `
                                                -Arguments $waitingArguments
         Wait-LogPattern -Path $clientTest.StderrPath `
-                        -Pattern "remote_handshake_client status=waiting client_protocol=6 host_protocol=0" `
+                        -Pattern "remote_handshake_client status=waiting client_protocol=8 host_protocol=0" `
                         -Description "client waiting-for-host status" `
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
@@ -385,10 +393,10 @@ function Invoke-RemoteHandshakeDiagnostics {
                                                -Arguments $waitingArguments
         $clientSender = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
         [byte[]]$clientHello = $probe.Receive([ref]$clientSender)
-        if ($clientHello.Length -ne 24 -or $clientHello[6] -ne 6) {
+        if ($clientHello.Length -ne 56 -or $clientHello[6] -ne 6) {
             throw "Client sent an invalid handshake hello."
         }
-        [byte[]]$mismatchResponse = New-Object byte[] 32
+        [byte[]]$mismatchResponse = New-Object byte[] 80
         [System.Text.Encoding]::ASCII.GetBytes("SBLK").CopyTo($mismatchResponse, 0)
         Set-UdpU16BigEndian -Buffer $mismatchResponse -Offset 4 -Value 5
         $mismatchResponse[6] = 7
@@ -399,7 +407,7 @@ function Invoke-RemoteHandshakeDiagnostics {
                             $mismatchResponse.Length,
                             $clientSender)
         Wait-LogPattern -Path $clientTest.StderrPath `
-                        -Pattern "remote_handshake_client status=protocol_mismatch client_protocol=6 host_protocol=5" `
+                        -Pattern "remote_handshake_client status=protocol_mismatch client_protocol=8 host_protocol=5" `
                         -Description "client protocol mismatch status" `
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
@@ -431,12 +439,12 @@ function Invoke-RemoteHandshakeDiagnostics {
         $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-session-mismatch-client" `
                                                -Arguments $clientArguments
         Wait-LogPattern -Path $clientTest.StderrPath `
-                        -Pattern "remote_handshake_client status=session_mismatch client_protocol=6 host_protocol=6" `
+                        -Pattern "remote_handshake_client status=session_mismatch client_protocol=8 host_protocol=8" `
                         -Description "client session mismatch status" `
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
         Assert-LogPattern -Path $hostTest.StderrPath `
-                          -Pattern "remote_handshake_host status=session_mismatch client_protocol=6 host_protocol=6" `
+                          -Pattern "remote_handshake_host status=session_mismatch client_protocol=8 host_protocol=8" `
                           -Description "host session mismatch response"
         if ((Read-Log -Path $hostTest.StderrPath) -match "remote_input_host client_active") {
             throw "Session-mismatched client was incorrectly activated by the host."
@@ -447,7 +455,7 @@ function Invoke-RemoteHandshakeDiagnostics {
         $probe = [System.Net.Sockets.UdpClient]::new()
         $probe.Client.ReceiveTimeout = $TimeoutSeconds * 1000
         $probe.Connect("127.0.0.1", $Port)
-        [byte[]]$hello = New-Object byte[] 24
+        [byte[]]$hello = New-Object byte[] 56
         [System.Text.Encoding]::ASCII.GetBytes("SBLK").CopyTo($hello, 0)
         Set-UdpU16BigEndian -Buffer $hello -Offset 4 -Value 65535
         $hello[6] = 6
@@ -457,17 +465,112 @@ function Invoke-RemoteHandshakeDiagnostics {
         $null = $probe.Send($hello, $hello.Length)
         $sender = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
         [byte[]]$response = $probe.Receive([ref]$sender)
-        if ($response.Length -ne 32 -or
+        if ($response.Length -ne 80 -or
             [System.Text.Encoding]::ASCII.GetString($response, 0, 4) -ne "SBLK" -or
-            (Get-UdpU16BigEndian -Buffer $response -Offset 4) -ne 6 -or
+            (Get-UdpU16BigEndian -Buffer $response -Offset 4) -ne 8 -or
             $response[6] -ne 7 -or
             $response[7] -ne 3) {
             throw "Host returned an invalid protocol-mismatch handshake response."
         }
         Assert-LogPattern -Path $hostTest.StderrPath `
-                          -Pattern "remote_handshake_host status=protocol_mismatch client_protocol=65535 host_protocol=6" `
+                          -Pattern "remote_handshake_host status=protocol_mismatch client_protocol=65535 host_protocol=8" `
                           -Description "host protocol mismatch response"
         Assert-NoFatalLog -Paths @($hostTest.StderrPath)
+
+        $probe.Dispose()
+        $probe = $null
+        Stop-TestProcess -Process $hostTest.Process
+        $hostTest = $null
+        Assert-PortAvailable -Port $Port
+
+        $authenticatedHostArguments = @(
+            "--remote-input-host", $Port.ToString(),
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", $script:TestRemoteKey,
+            "--remote-host-view", "p1",
+            $script:QuotedRomPath
+        )
+        $hostTest = Start-SameBoyTestProcess -Name "remote-handshake-auth-host" `
+                                             -Arguments $authenticatedHostArguments
+        Wait-LogPattern -Path $hostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port .*auth=enabled" `
+                        -Description "authenticated handshake host startup" `
+                        -Process $hostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $wrongKeyArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", "ffeeddccbbaa99887766554433221100"
+        )
+        $clientTest = Start-SameBoyTestProcess -Name "remote-handshake-wrong-key-client" `
+                                               -Arguments $wrongKeyArguments
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_handshake_client status=auth_failed client_protocol=8 host_protocol=8" `
+                        -Description "client authentication failure status" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Assert-LogPattern -Path $hostTest.StderrPath `
+                          -Pattern "remote_handshake_host status=auth_failed client_protocol=8 host_protocol=8" `
+                          -Description "host authentication rejection"
+        if ((Read-Log -Path $hostTest.StderrPath) -match "remote_input_host client_active") {
+            throw "Client with the wrong session key was incorrectly activated by the host."
+        }
+        Assert-NoFatalLog -Paths @($hostTest.StderrPath, $clientTest.StderrPath)
+
+        Stop-TestProcess -Process $clientTest.Process
+        $clientTest = $null
+        Stop-TestProcess -Process $hostTest.Process
+        $hostTest = $null
+        Assert-PortAvailable -Port $Port
+
+        $automaticHostArguments = @(
+            "--remote-input-host", $Port.ToString(),
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-auto-pair",
+            "--remote-host-view", "p1",
+            $script:QuotedRomPath
+        )
+        $hostTest = Start-SameBoyTestProcess -Name "remote-first-client-lock-host" `
+                                             -Arguments $automaticHostArguments
+        Wait-LogPattern -Path $hostTest.StderrPath `
+                        -Pattern "remote_input_host listening_udp_port=$Port .*pairing=automatic" `
+                        -Description "first-client lock host startup" `
+                        -Process $hostTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $automaticClientArguments = @(
+            "--nogl",
+            "--remote-input-client", "127.0.0.1:$Port",
+            "--remote-session", $TestSessionId.ToString()
+        )
+        $clientTest = Start-SameBoyTestProcess -Name "remote-first-client-lock-primary" `
+                                               -Arguments $automaticClientArguments
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_video_client first_frame=" `
+                        -Description "first automatically paired client" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+
+        $secondClientTest = Start-SameBoyTestProcess -Name "remote-first-client-lock-rejected" `
+                                                     -Arguments $automaticClientArguments
+        Wait-LogPattern -Path $secondClientTest.StderrPath `
+                        -Pattern "remote_handshake_client status=auth_failed client_protocol=8 host_protocol=8" `
+                        -Description "second client rejection after pairing lock" `
+                        -Process $secondClientTest.Process `
+                        -Timeout $TimeoutSeconds
+        if ((Read-Log -Path $secondClientTest.StderrPath) -match "remote_video_client first_frame=") {
+            throw "A second client received video after the automatic pairing lock."
+        }
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_video_client frames=600" `
+                        -Description "first client retained after second-client rejection" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
+        Assert-NoFatalLog -Paths @($hostTest.StderrPath,
+                                   $clientTest.StderrPath,
+                                   $secondClientTest.StderrPath)
         Write-Host "[PASS] remote-handshake-errors"
     }
     finally {
@@ -476,6 +579,9 @@ function Invoke-RemoteHandshakeDiagnostics {
         }
         if ($clientTest) {
             Stop-TestProcess -Process $clientTest.Process
+        }
+        if ($secondClientTest) {
+            Stop-TestProcess -Process $secondClientTest.Process
         }
         if ($hostTest) {
             Stop-TestProcess -Process $hostTest.Process
@@ -498,6 +604,7 @@ function Invoke-RemoteReconnect {
         $hostArguments = @(
             "--remote-input-host", $Port.ToString(),
             "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", $script:TestRemoteKey,
             "--remote-host-view", "p1",
             $script:QuotedRomPath
         )
@@ -512,7 +619,8 @@ function Invoke-RemoteReconnect {
         $clientArguments = @(
             "--nogl",
             "--remote-input-client", "127.0.0.1:$Port",
-            "--remote-session", $TestSessionId.ToString()
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", $script:TestRemoteKey
         )
         $firstClientTest = Start-SameBoyTestProcess -Name "remote-reconnect-first-client" `
                                                     -Arguments $clientArguments
@@ -542,7 +650,7 @@ function Invoke-RemoteReconnect {
                              -Process $hostTest.Process `
                              -Timeout $TimeoutSeconds
         Assert-LogPattern -Path $secondClientTest.StderrPath `
-                          -Pattern "remote_handshake_client status=connected client_protocol=6 host_protocol=6" `
+                          -Pattern "remote_handshake_client status=connected client_protocol=8 host_protocol=8" `
                           -Description "rejoined client handshake"
         Assert-NoFatalLog -Paths @($hostTest.StderrPath,
                                    $firstClientTest.StderrPath,
@@ -577,6 +685,7 @@ function Invoke-RemoteHostReconnect {
         $hostArguments = @(
             "--remote-input-host", $Port.ToString(),
             "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", $script:TestRemoteKey,
             "--remote-host-view", "p1",
             $script:QuotedRomPath
         )
@@ -591,7 +700,8 @@ function Invoke-RemoteHostReconnect {
         $clientArguments = @(
             "--nogl",
             "--remote-input-client", "127.0.0.1:$Port",
-            "--remote-session", $TestSessionId.ToString()
+            "--remote-session", $TestSessionId.ToString(),
+            "--remote-key", $script:TestRemoteKey
         )
         $clientTest = Start-SameBoyTestProcess -Name "remote-host-reconnect-client" `
                                                -Arguments $clientArguments
@@ -648,6 +758,7 @@ function Invoke-RemoteHostReconnect {
 }
 
 $script:RepositoryRoot = $PSScriptRoot
+$script:TestRemoteKey = "00112233445566778899aabbccddeeff"
 $resolvedRom = Resolve-Path -LiteralPath $RomPath -ErrorAction Stop
 $script:Executable = Join-Path $script:RepositoryRoot "build\bin\SDL\sameboy.exe"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"

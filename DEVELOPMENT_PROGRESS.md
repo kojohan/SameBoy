@@ -1001,3 +1001,81 @@ rather than network queue growth. The clock estimator now retains minimum RTT
 for uncertainty but continuously smooths offset from the lower-delay half of
 samples. Run 1 remains useful transport/audio/total-latency evidence but must be
 repeated for the corrected long-duration video-network baseline.
+
+### Protocol v7 authenticated handshake
+
+Development moved from repeated physical performance runs to the first concrete
+security slice. Protocol v7 adds an optional 128-bit shared Session Key. Windows
+CNG supplies cryptographically secure keys/nonces and HMAC-SHA-256; a truncated
+128-bit tag authenticates each fixed-size `Hello` and response. The host does not
+activate a client with a missing or incorrect key, and P2 displays
+`Authentication failed` instead of entering the connected state. Diagnostics
+record only `auth=enabled` or `auth=disabled`, never the key.
+
+`Remote Link Settings` now persists the key and reports only `Configured` in the
+menu. The follow-up direct-IP invitation flow removes manual key handling:
+`Copy Invite` packages the configured endpoint, Session ID and an automatically
+generated key into one clipboard string, while `Join Invite from Clipboard…`
+imports all three and starts P2. CLI regression paths retain
+`--remote-key <32hex>` for automation and advanced use. The warnings-as-
+errors Windows build and all seven automated test groups passed at
+`build/regression/automated-20260820-183418-13376`; normal OpenGL/SDL loopbacks
+and both reconnect directions used the authenticated path, while the negative
+handshake group verified that a wrong key never activates P2.
+
+This is deliberately not claimed as complete transport security. Input, clock,
+video and audio datagrams still need authentication, replay protection and
+encryption. That per-packet layer is the next implementation step, followed by
+one focused two-PC regression rather than another broad performance matrix.
+
+The first invite UI was still too developer-oriented, so the main flow was
+collapsed again. `Host Remote Link…` now detects the default-route LAN IPv4,
+generates credentials when absent, copies the invite and starts hosting in one
+action. `Join Remote Link…` imports the clipboard invite and starts P2 in one
+action, with manual `IP:port` as a fallback. Address override, port, Session ID
+and raw key controls initially moved behind `Advanced Remote Settings…`; this
+was an intermediate protocol-v7 UI and is superseded by protocol v8 below.
+
+### Protocol v8 automatic first-client pairing
+
+The user-facing key controls were removed completely. Every
+`Host Remote Link…` lifetime now creates a fresh internal 128-bit key. The host
+sends that key in a one-time pairing response to the first client, the client
+confirms possession with the authenticated handshake, and the host then rejects
+clients that do not possess the same key until hosting ends. Starting Host again
+creates a different key and begins a new pairing lifetime.
+
+The client retains the received key internally so an ordinary disconnect or
+network interruption can reconnect without user action. Invitations now use
+`SBLINK2` and contain only endpoint and Session ID; neither the interface,
+clipboard invitation nor diagnostics expose the key. `--remote-key` remains
+only as a developer diagnostic path, while normal CLI regression uses
+`--remote-auto-pair` on the host.
+
+The compact menus were also constrained to the native 160-pixel UI width.
+`Remote Settings…` and `Network Settings…` replace the longer submenu names;
+address rows show `Auto`, `Manual`, `Set` or `Empty` instead of printing a full
+endpoint across the menu. Selecting the row still opens the complete value for
+editing. The manual Join fallback now uses only the short `Enter IP:port`
+instruction instead of a second explanatory sentence that overflowed the
+native-width dialog.
+
+The warnings-as-errors Windows build and all seven automated regression groups
+passed at `build/regression/automated-20260820-184807-12772`. The handshake
+diagnostics additionally verified that the first automatically paired client
+continued receiving video through frame 600 while a second client was rejected
+with `Authentication failed` and received no video.
+
+This is intentionally a usability-oriented development transport, not final
+Internet security. The initial key transfer and realtime media are plaintext,
+so an active observer can capture the session. Packet authentication, replay
+protection and encryption remain required before public release.
+
+### Compact portable Windows distribution
+
+`build-portable-windows.ps1` now creates a clean optimized PCM-only release and
+packages it as one verified ZIP for sharing. It preserves the complete normal
+runtime assets but excludes preferences, debugger files, Opus, diagnostic
+launchers and development metadata. The recipient only extracts the contained
+`SameBoyLink` folder and runs `sameboy.exe`; the build has no installer and does
+not inherit the builder's settings.

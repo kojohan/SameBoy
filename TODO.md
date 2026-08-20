@@ -38,6 +38,8 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Route existing CLI modes through the same session lifecycle API.
 - [x] Add a dedicated `Link` submenu to SameBoy's existing SDL menu system.
 - [x] Add `Local Link…`, `Host Remote Link…`, `Join Remote Link…`, `Disconnect` and `Remote Link Settings…` actions.
+- [x] Add a one-copy direct-IP development invite containing only endpoint and Session ID.
+- [x] Collapse normal Host/Join to one action each with automatic LAN endpoint detection and move transport details behind Advanced settings.
 - [x] Add independent persistent keyboard mappings for P1 and P2.
 - [x] Add independent persistent controller selection/mappings for P1 and P2.
 - [x] Use both local mappings in Local Link and the client P2 mapping in Remote Play.
@@ -84,7 +86,7 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 - [x] Complete an extended 7.5-minute Wi-Fi/Wi-Fi schema-v4 baseline.
 - [ ] Add sender queue-age windows only if a sender queue is implemented; no such queue exists in the accepted baseline.
 - [x] Count frames actually presented separately from completed and superseded frames.
-- [ ] Run the fixed-role five-minute performance matrix with the clean protocol-v6 build.
+- [ ] Deferred: finish the fixed-role five-minute performance matrix only if a repeatable media fault reopens performance work.
   - [ ] Three repetitions: desktop Ethernet host -> laptop Ethernet client.
   - [ ] Three repetitions: desktop Ethernet host -> laptop Wi-Fi client.
   - [ ] Three repetitions: laptop Wi-Fi host -> desktop Ethernet client.
@@ -170,10 +172,11 @@ This file is the actionable development checklist. Keep `ROADMAP.md` focused on 
 ## Security before public Internet release
 
 - [ ] Treat all network packets and invite URLs as untrusted.
-- [ ] Validate packet lengths, versions, sequence ranges and session IDs.
+- [x] Validate current packet lengths, versions, sequence ranges and session IDs.
 - [ ] Add rate limiting / malformed-packet handling.
 - [ ] Use TLS for coordination service.
-- [ ] Authenticate realtime sessions.
+- [x] Add protocol-v8 automatic first-client key transfer and lock the host to clients that confirm the session key.
+- [ ] Authenticate input, clock, video and audio datagrams and reject replayed packets.
 - [ ] Encrypt P2P/relay traffic before public release.
 - [ ] Never accept peer-provided arbitrary local file paths.
 - [ ] Do not deserialize arbitrary remote SameBoy save states in Remote Play mode.

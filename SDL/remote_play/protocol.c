@@ -9,6 +9,7 @@
 #define CLOCK_SYNC_PONG_PACKET_TYPE 5
 #define HANDSHAKE_HELLO_PACKET_TYPE 6
 #define HANDSHAKE_RESPONSE_PACKET_TYPE 7
+#define HANDSHAKE_AUTHENTICATED_FLAG 1
 #define VALID_BUTTON_MASK 0xFF
 #define AUDIO_CHANNELS_STEREO 2
 
@@ -57,6 +58,15 @@ static bool has_packet_header(const uint8_t *data, size_t size, uint8_t packet_t
            data[6] == packet_type;
 }
 
+static bool bytes_are_zero(const uint8_t *data, size_t size)
+{
+    uint8_t combined = 0;
+    for (size_t i = 0; i < size; i++) {
+        combined |= data[i];
+    }
+    return combined == 0;
+}
+
 void remote_play_encode_handshake_hello(
     uint8_t output[REMOTE_PLAY_HANDSHAKE_HELLO_SIZE],
     const RemotePlayHandshakeHello *hello)
@@ -67,10 +77,12 @@ void remote_play_encode_handshake_hello(
     output[3] = 'K';
     write_u16(output + 4, hello->protocol_version);
     output[6] = HANDSHAKE_HELLO_PACKET_TYPE;
-    output[7] = 0;
+    output[7] = hello->authenticated? HANDSHAKE_AUTHENTICATED_FLAG : 0;
     write_u32(output + 8, hello->session_id);
     write_u64(output + 12, hello->request_id);
-    write_u32(output + 20, 0);
+    memcpy(output + 20, hello->client_nonce, REMOTE_PLAY_AUTH_NONCE_SIZE);
+    memcpy(output + 36, hello->auth_tag, REMOTE_PLAY_AUTH_TAG_SIZE);
+    write_u32(output + 52, 0);
 }
 
 bool remote_play_decode_handshake_hello(RemotePlayHandshakeHello *hello,
@@ -79,9 +91,15 @@ bool remote_play_decode_handshake_hello(RemotePlayHandshakeHello *hello,
 {
     if (!hello || size != REMOTE_PLAY_HANDSHAKE_HELLO_SIZE ||
         !has_packet_header(data, size, HANDSHAKE_HELLO_PACKET_TYPE) ||
-        data[7] != 0 || read_u16(data + 4) == 0 ||
+        (data[7] & ~HANDSHAKE_AUTHENTICATED_FLAG) != 0 || read_u16(data + 4) == 0 ||
         read_u32(data + 8) == 0 || read_u64(data + 12) == 0 ||
-        read_u32(data + 20) != 0) {
+        read_u32(data + 52) != 0) {
+        return false;
+    }
+
+    bool authenticated = (data[7] & HANDSHAKE_AUTHENTICATED_FLAG) != 0;
+    if (authenticated != !bytes_are_zero(data + 20, REMOTE_PLAY_AUTH_NONCE_SIZE) ||
+        (!authenticated && !bytes_are_zero(data + 36, REMOTE_PLAY_AUTH_TAG_SIZE))) {
         return false;
     }
 
@@ -89,7 +107,10 @@ bool remote_play_decode_handshake_hello(RemotePlayHandshakeHello *hello,
         .protocol_version = read_u16(data + 4),
         .session_id = read_u32(data + 8),
         .request_id = read_u64(data + 12),
+        .authenticated = authenticated,
     };
+    memcpy(hello->client_nonce, data + 20, REMOTE_PLAY_AUTH_NONCE_SIZE);
+    memcpy(hello->auth_tag, data + 36, REMOTE_PLAY_AUTH_TAG_SIZE);
     return true;
 }
 
@@ -107,7 +128,13 @@ void remote_play_encode_handshake_response(
     write_u32(output + 8, response->session_id);
     write_u64(output + 12, response->request_id);
     write_u64(output + 20, response->host_id);
-    write_u32(output + 28, 0);
+    memcpy(output + 28, response->host_nonce, REMOTE_PLAY_AUTH_NONCE_SIZE);
+    memcpy(output + 44, response->pairing_key, REMOTE_PLAY_AUTH_KEY_SIZE);
+    memcpy(output + 60, response->auth_tag, REMOTE_PLAY_AUTH_TAG_SIZE);
+    output[76] = response->authenticated? HANDSHAKE_AUTHENTICATED_FLAG : 0;
+    output[77] = 0;
+    output[78] = 0;
+    output[79] = 0;
 }
 
 bool remote_play_decode_handshake_response(RemotePlayHandshakeResponse *response,
@@ -118,10 +145,25 @@ bool remote_play_decode_handshake_response(RemotePlayHandshakeResponse *response
         !has_packet_header(data, size, HANDSHAKE_RESPONSE_PACKET_TYPE) ||
         read_u16(data + 4) == 0 || read_u32(data + 8) == 0 ||
         read_u64(data + 12) == 0 || read_u64(data + 20) == 0 ||
-        read_u32(data + 28) != 0 ||
+        (data[76] & ~HANDSHAKE_AUTHENTICATED_FLAG) != 0 ||
+        data[77] != 0 || data[78] != 0 || data[79] != 0 ||
         (data[7] != REMOTE_PLAY_HANDSHAKE_ACCEPTED &&
          data[7] != REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH &&
-         data[7] != REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH)) {
+         data[7] != REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH &&
+         data[7] != REMOTE_PLAY_HANDSHAKE_AUTH_FAILED &&
+         data[7] != REMOTE_PLAY_HANDSHAKE_PAIRING)) {
+        return false;
+    }
+
+    bool authenticated = (data[76] & HANDSHAKE_AUTHENTICATED_FLAG) != 0;
+    bool pairing = data[7] == REMOTE_PLAY_HANDSHAKE_PAIRING;
+    if (authenticated != !bytes_are_zero(data + 28, REMOTE_PLAY_AUTH_NONCE_SIZE) ||
+        (authenticated && !bytes_are_zero(data + 44, REMOTE_PLAY_AUTH_KEY_SIZE)) ||
+        (pairing &&
+         (authenticated || bytes_are_zero(data + 44, REMOTE_PLAY_AUTH_KEY_SIZE))) ||
+        (!authenticated && !pairing &&
+         !bytes_are_zero(data + 44, REMOTE_PLAY_AUTH_KEY_SIZE)) ||
+        (!authenticated && !bytes_are_zero(data + 60, REMOTE_PLAY_AUTH_TAG_SIZE))) {
         return false;
     }
 
@@ -131,7 +173,11 @@ bool remote_play_decode_handshake_response(RemotePlayHandshakeResponse *response
         .request_id = read_u64(data + 12),
         .host_id = read_u64(data + 20),
         .status = (RemotePlayHandshakeStatus)data[7],
+        .authenticated = authenticated,
     };
+    memcpy(response->host_nonce, data + 28, REMOTE_PLAY_AUTH_NONCE_SIZE);
+    memcpy(response->pairing_key, data + 44, REMOTE_PLAY_AUTH_KEY_SIZE);
+    memcpy(response->auth_tag, data + 60, REMOTE_PLAY_AUTH_TAG_SIZE);
     return true;
 }
 

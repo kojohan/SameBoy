@@ -93,7 +93,7 @@ Deliverables:
 
 ## Phase 4 — Streaming quality layer
 
-**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable media baseline. Protocol v6 retains that media behavior and adds a handshake/status layer; automated verification and physical two-PC connection-notice/bidirectional-reconnect tests pass. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
+**Status:** In progress (Balanced lossless video and adaptive PCM are physically verified. Protocol v5 reduced normal video datagrams by about 19% without adding a frame queue, and repeated Wi-Fi/Wi-Fi runs are accepted as the current playable media baseline. Protocol v8 retains that media behavior, v6's status/reconnect lifecycle, and adds automatic first-client pairing with automated second-client rejection. Opus was tested and deferred; client resizing, zero-queue presentation telemetry, immutable P1-only host presentation, bounded audio-arrival telemetry and schema-v4 RTT/jitter/video/total-latency windows are complete. An extended 7.5-minute schema-v4 Wi-Fi/Wi-Fi run was acceptable in practice, so deeper PCM/transport tuning remains deferred rather than adding latency without a repeatable perceived fault.)
 
 **Goal:** provide good image quality without adding unnecessary latency.
 
@@ -232,12 +232,15 @@ Deliverables:
 - compatibility matrix;
 - automated smoke/regression testing.
 
-The first connection-status slice is complete in protocol v6: Remote Client
-shows connecting, waiting, session mismatch, protocol mismatch and connected
+The connection-status and automatic-pairing slices are complete in protocol v8: Remote Client
+shows connecting, waiting, pairing, session mismatch, protocol mismatch, rejection and connected
 before the first media frame. Both players also receive local connected and
 disconnected gameplay notices, with P2 returning to waiting after its brief
 disconnect notice. Direct/relay path labels remain part of the
-future zero-configuration connectivity work.
+future zero-configuration connectivity work. Host transfers a fresh internal
+key to the first client and rejects later clients until that Host lifetime ends.
+The plaintext initial exchange is a development convenience, not release-grade
+transport security.
 
 ---
 

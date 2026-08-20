@@ -12,6 +12,8 @@
 #include "gui.h"
 #include "font.h"
 #include "audio/audio.h"
+#include "remote_play/auth.h"
+#include "remote_play/transport_udp.h"
 
 #ifdef _WIN32
 #include <dwmapi.h>
@@ -298,7 +300,7 @@ static enum {
 
 static char text_input_title[26];
 static char text_input_title2[26];
-static char text_input[26];
+static char text_input[65];
 
 static void (*text_input_callback)(char ch) = NULL;
 
@@ -333,6 +335,8 @@ static void enter_controls_menu(unsigned index);
 static void enter_link_menu(unsigned index);
 static void enter_remote_link_settings_menu(unsigned index);
 static void begin_join_remote_input(void);
+static void join_remote_invite_from_clipboard(unsigned index);
+static bool copy_remote_invite_to_clipboard(bool show_confirmation);
 static void enter_help_menu(unsigned index);
 static void enter_options_menu(unsigned index);
 static void toggle_audio_recording(unsigned index);
@@ -462,6 +466,9 @@ static void start_remote_host(unsigned index)
                                  window);
         return;
     }
+    if (!copy_remote_invite_to_clipboard(true)) {
+        return;
+    }
     pending_command = GB_SDL_START_REMOTE_HOST_COMMAND;
 }
 
@@ -474,7 +481,7 @@ static void start_remote_client(unsigned index)
                                  window);
         return;
     }
-    begin_join_remote_input();
+    join_remote_invite_from_clipboard(index);
 }
 
 static const struct menu_item link_menu[] = {
@@ -482,7 +489,7 @@ static const struct menu_item link_menu[] = {
     {"Host Remote Link...", start_remote_host},
     {"Join Remote Link...", start_remote_client},
     {"Disconnect", disconnect_link},
-    {"Remote Link Settings...", enter_remote_link_settings_menu},
+    {"Remote Settings...", enter_remote_link_settings_menu},
     {"Back", return_to_root_menu},
     {NULL,}
 };
@@ -497,6 +504,7 @@ static void enter_link_menu(unsigned index)
 
 typedef enum {
     REMOTE_TEXT_ENDPOINT,
+    REMOTE_TEXT_ADVERTISED_ENDPOINT,
     REMOTE_TEXT_PORT,
     REMOTE_TEXT_SESSION,
 } remote_text_field_t;
@@ -518,20 +526,33 @@ static void remote_setting_text_callback(char ch)
         return;
     }
     if (ch == '\n') {
-        if (remote_text_field == REMOTE_TEXT_ENDPOINT) {
-            if (!text_input[0] || !strchr(text_input, ':')) {
+        if (remote_text_field == REMOTE_TEXT_ENDPOINT ||
+            remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT) {
+            bool automatic_address =
+                remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT &&
+                !text_input[0];
+            if (!automatic_address && !strchr(text_input, ':')) {
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                                         "Invalid Join Address",
-                                         "Use an address with a port, for example 192.168.1.20:45930.",
+                                         "Invalid Remote Address",
+                                         "Use an address with a port, for example 192.168.1.20:45930, or leave Public Address empty for automatic LAN detection.",
                                          window);
                 return;
             }
-            snprintf(configuration.remote_link_endpoint,
-                     sizeof(configuration.remote_link_endpoint),
-                     "%s",
-                     text_input);
+            if (remote_text_field == REMOTE_TEXT_ENDPOINT) {
+                snprintf(configuration.remote_link_endpoint,
+                         sizeof(configuration.remote_link_endpoint),
+                         "%s",
+                         text_input);
+            }
+            else {
+                snprintf(configuration.remote_link_advertised_endpoint,
+                         sizeof(configuration.remote_link_advertised_endpoint),
+                         "%s",
+                         text_input);
+            }
             finish_remote_text_input();
-            if (remote_text_connect_after_submit) {
+            if (remote_text_field == REMOTE_TEXT_ENDPOINT &&
+                remote_text_connect_after_submit) {
                 remote_text_connect_after_submit = false;
                 pending_command = GB_SDL_START_REMOTE_CLIENT_COMMAND;
             }
@@ -563,8 +584,11 @@ static void remote_setting_text_callback(char ch)
 
     size_t length = strlen(text_input);
     if (length + 1 >= sizeof(text_input) || ch < ' ') return;
-    if (remote_text_field != REMOTE_TEXT_ENDPOINT && !isdigit((unsigned char)ch)) return;
-    if (remote_text_field == REMOTE_TEXT_ENDPOINT &&
+    if (remote_text_field != REMOTE_TEXT_ENDPOINT &&
+        remote_text_field != REMOTE_TEXT_ADVERTISED_ENDPOINT &&
+        !isdigit((unsigned char)ch)) return;
+    if ((remote_text_field == REMOTE_TEXT_ENDPOINT ||
+         remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT) &&
         !isalnum((unsigned char)ch) && ch != '.' && ch != '-' && ch != ':' &&
         ch != '[' && ch != ']') return;
     text_input[length] = ch;
@@ -586,7 +610,13 @@ static void begin_remote_text_input(remote_text_field_t field,
 
 static const char *remote_endpoint_value(unsigned index)
 {
-    return configuration.remote_link_endpoint;
+    return configuration.remote_link_endpoint[0]? "Set" : "Empty";
+}
+
+static const char *remote_advertised_endpoint_value(unsigned index)
+{
+    return configuration.remote_link_advertised_endpoint[0]?
+        "Manual" : "Auto";
 }
 
 static const char *remote_port_value(unsigned index)
@@ -605,7 +635,7 @@ static const char *remote_session_value(unsigned index)
 
 static const char *remote_host_view_value(unsigned index)
 {
-    return configuration.remote_link_host_show_p2? "Both screens" : "P1 only";
+    return configuration.remote_link_host_show_p2? "Both" : "P1";
 }
 
 static void edit_remote_endpoint(unsigned index)
@@ -614,6 +644,18 @@ static void edit_remote_endpoint(unsigned index)
     begin_remote_text_input(REMOTE_TEXT_ENDPOINT,
                             "Join Address",
                             configuration.remote_link_endpoint);
+}
+
+static void edit_remote_advertised_endpoint(unsigned index)
+{
+    remote_text_connect_after_submit = false;
+    begin_remote_text_input(REMOTE_TEXT_ADVERTISED_ENDPOINT,
+                            "Public Address",
+                            configuration.remote_link_advertised_endpoint);
+    snprintf(text_input_title2,
+             sizeof(text_input_title2),
+             "%s",
+             "Empty = automatic LAN");
 }
 
 static void begin_join_remote_input(void)
@@ -642,6 +684,141 @@ static void edit_remote_session(unsigned index)
     begin_remote_text_input(REMOTE_TEXT_SESSION, "Session ID", value);
 }
 
+static bool copy_remote_invite_to_clipboard(bool show_confirmation)
+{
+    char endpoint[64];
+    if (configuration.remote_link_advertised_endpoint[0]) {
+        snprintf(endpoint,
+                 sizeof(endpoint),
+                 "%s",
+                 configuration.remote_link_advertised_endpoint);
+    }
+    else if (!remote_udp_get_local_ipv4_endpoint(endpoint,
+                                                  sizeof(endpoint),
+                                                  configuration.remote_link_port)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link",
+                                 "Could not detect a LAN address. Set Public Address under Remote Settings, then try again.",
+                                 window);
+        return false;
+    }
+    char invite[160];
+    int length = snprintf(invite,
+                          sizeof(invite),
+                          "SBLINK2|%s|%lu",
+                          endpoint,
+                          (unsigned long)configuration.remote_link_session_id);
+    if (length < 0 || (size_t)length >= sizeof(invite) ||
+        SDL_SetClipboardText(invite) != 0) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link",
+                                 "Could not copy the invite to the clipboard.",
+                                 window);
+        memset(invite, 0, sizeof(invite));
+        return false;
+    }
+    memset(invite, 0, sizeof(invite));
+    if (show_confirmation) {
+        char message[192];
+        snprintf(message,
+                 sizeof(message),
+                 "Invite for %s copied. Send it through a trusted chat; Player 2 only chooses Join Remote Link.",
+                 endpoint);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 message,
+                                 window);
+    }
+    return true;
+}
+
+static void copy_remote_invite(unsigned index)
+{
+    copy_remote_invite_to_clipboard(true);
+}
+
+static bool import_remote_invite(const char *invite)
+{
+    static const char prefix[] = "SBLINK2|";
+    if (!invite) {
+        return false;
+    }
+    while (isspace((unsigned char)*invite)) invite++;
+    size_t invite_length = strlen(invite);
+    while (invite_length &&
+           isspace((unsigned char)invite[invite_length - 1])) {
+        invite_length--;
+    }
+    if (invite_length >= 160 || invite_length < sizeof(prefix) - 1 ||
+        strncmp(invite, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+
+    char copy[160];
+    size_t payload_length = invite_length - (sizeof(prefix) - 1);
+    memcpy(copy, invite + sizeof(prefix) - 1, payload_length);
+    copy[payload_length] = 0;
+    char *session_separator = strchr(copy, '|');
+    if (!session_separator) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+    *session_separator++ = 0;
+    if (strchr(session_separator, '|')) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long session_id = strtoul(session_separator, &end, 10);
+    bool valid = copy[0] && strchr(copy, ':') &&
+        strlen(copy) < sizeof(configuration.remote_link_endpoint) &&
+        !errno && session_separator[0] && !*end &&
+        session_id >= 1 && session_id <= UINT32_MAX;
+    if (!valid) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+
+    bool same_session = configuration.remote_link_session_id == session_id &&
+        strcmp(configuration.remote_link_endpoint, copy) == 0;
+    snprintf(configuration.remote_link_endpoint,
+             sizeof(configuration.remote_link_endpoint),
+             "%s",
+             copy);
+    configuration.remote_link_session_id = (uint32_t)session_id;
+    if (!same_session) {
+        memset(configuration.remote_link_key,
+               0,
+               sizeof(configuration.remote_link_key));
+    }
+    memset(copy, 0, sizeof(copy));
+    return true;
+}
+
+static void join_remote_invite_from_clipboard(unsigned index)
+{
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Disconnect the current link session before joining.",
+                                 window);
+        return;
+    }
+    char *invite = SDL_GetClipboardText();
+    bool imported = import_remote_invite(invite);
+    if (invite) {
+        memset(invite, 0, strlen(invite));
+        SDL_free(invite);
+    }
+    if (!imported) {
+        begin_join_remote_input();
+        return;
+    }
+    pending_command = GB_SDL_START_REMOTE_CLIENT_COMMAND;
+}
+
 static void toggle_remote_host_view(unsigned index)
 {
     configuration.remote_link_host_show_p2 = !configuration.remote_link_host_show_p2;
@@ -652,14 +829,37 @@ static void return_to_link_menu(unsigned index)
     enter_link_menu(index);
 }
 
+static void enter_remote_technical_settings_menu(unsigned index);
+
 static const struct menu_item remote_link_settings_menu[] = {
-    {"Join Address", edit_remote_endpoint, remote_endpoint_value},
-    {"Host UDP Port", edit_remote_port, remote_port_value},
-    {"Session ID", edit_remote_session, remote_session_value},
-    {"Host View", toggle_remote_host_view, remote_host_view_value},
+    {"Public Address", edit_remote_advertised_endpoint, remote_advertised_endpoint_value},
+    {"Host Screen", toggle_remote_host_view, remote_host_view_value},
+    {"Copy Invite", copy_remote_invite},
+    {"Network Settings...", enter_remote_technical_settings_menu},
     {"Back", return_to_link_menu},
     {NULL,}
 };
+
+static void return_to_remote_link_settings(unsigned index)
+{
+    enter_remote_link_settings_menu(index);
+}
+
+static const struct menu_item remote_technical_settings_menu[] = {
+    {"UDP Port", edit_remote_port, remote_port_value},
+    {"Session", edit_remote_session, remote_session_value},
+    {"Join Address", edit_remote_endpoint, remote_endpoint_value},
+    {"Back", return_to_remote_link_settings},
+    {NULL,}
+};
+
+static void enter_remote_technical_settings_menu(unsigned index)
+{
+    current_menu = remote_technical_settings_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
 
 static void enter_remote_link_settings_menu(unsigned index)
 {

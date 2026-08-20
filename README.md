@@ -4,7 +4,7 @@
 
 > Development branch: `sameboy-link`
 >
-> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v6 adds an explicit connection handshake and visible waiting/session/protocol status while retaining protocol v5's physically verified low-latency media path. Its connection notices and bidirectional peer-reconnect lifecycle are physically verified on two PCs. The v5 path is playable over Ethernet and Wi-Fi and passed a five-minute manual public-IPv4/UDP port-forwarding test. PCM is the stable audio baseline; Opus remains experimental and deferred.
+> Status: Phase 0 through Phase 3 are complete. Local Link, direct-IP Remote Host/Join, persistent P1/P2 controls, the Remote Client menu and SameBoy's full client-side OpenGL shader/filter pipeline are integrated into the normal SDL frontend. Protocol v8 adds automatic first-client pairing: each Host session creates a fresh internal key, transfers it to the first client and then rejects clients without that key until the session ends. No key is shown or entered by the user. The initial transfer and realtime media are not encrypted, so direct Internet play remains development-only. PCM is the stable audio baseline; Opus remains experimental and deferred.
 
 ## What we are building
 
@@ -57,10 +57,13 @@ The connection layer is planned to support direct IPv6/UDP, NAT traversal/hole p
 
 Until room codes and automatic connectivity are implemented:
 
-1. The host opens a ROM and chooses `Link > Remote Link Settings…` to set the UDP port and shared session ID.
-2. The host chooses `Link > Host Remote Link…`.
-3. The client chooses `Link > Join Remote Link…`, enters `IP:port` and uses the same session ID.
+1. The host opens a ROM and chooses `Link > Host Remote Link…`. A LAN address is detected, a fresh internal session key is created, and an endpoint/session invite is copied automatically.
+2. The host sends the invite through a trusted chat.
+3. P2 copies it and chooses `Link > Join Remote Link…`; the first client receives and confirms the internal key automatically.
 4. The client presses Escape for local video, audio and P2 control settings. `Disconnect` returns to the ordinary SameBoy start window.
+
+Manual address, port and Session ID controls live under `Remote Settings…`
+for public-IP forwarding, diagnostics and compatibility testing.
 
 Internet testing currently requires manual UDP forwarding of the selected host port. Only the host needs the ROM.
 
@@ -103,9 +106,10 @@ Start here depending on what you want to know:
 The completed foundation now includes the reproducible Windows build, dual-core
 Local Link, explicit session modes, persistent independent controls, menu-driven
 Host/Join/Disconnect, measured LAN Remote Play, adaptive PCM audio and a
-settings-capable Remote Client with local SameBoy shaders/filters. Protocol v6
-adds an explicit `Hello`/response handshake and visible `Connecting`, `Waiting`,
-session-mismatch, protocol-mismatch and `Connected` states. When play begins,
+settings-capable Remote Client with local SameBoy shaders/filters. Protocol v8
+adds automatic first-client pairing and a session-scoped client lock, plus
+visible `Connecting`, `Waiting`, pairing, mismatch, rejection and `Connected`
+states. Users never configure or exchange a key. When play begins,
 P1 briefly sees `Player 2 connected` and P2 sees `Player 1 connected` directly
 on their respective gameplay images. If either peer disappears, the remaining
 player receives the corresponding `Player 2 disconnected` or
@@ -122,9 +126,9 @@ without per-packet logging. A physical Wi-Fi/Wi-Fi verification had no audible
 audio faults, so the current low-latency PCM settings remain unchanged. The next
 work is:
 
-1. complete the remaining fixed-role baseline matrix using the physically verified ten-second RTT/jitter/video/total-latency windows;
-2. revisit PCM, priority scheduling or lower-bandwidth video only when repeated audible/visible evidence justifies it;
-3. build session authentication and encryption on the v6 handshake, then add coordination, NAT traversal and relay fallback.
+1. physically verify the simplified one-click Host/Join and first-client lock on two PCs;
+2. continue user-facing connection work: coordination, NAT traversal and relay fallback;
+3. revisit stronger transport security or performance tuning when public-release requirements or repeatable faults justify it.
 
 See [REMOTE_PLAY_PERFORMANCE_PLAN.md](REMOTE_PLAY_PERFORMANCE_PLAN.md),
 [ROADMAP.md](ROADMAP.md) and [TODO.md](TODO.md) for the full breakdown.

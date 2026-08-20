@@ -292,7 +292,7 @@ endif
 ifeq ($(PLATFORM),windows32)
 CFLAGS += -IWindows -Drandom=rand --target=x86_64-pc-windows
 LDFLAGS += -lmsvcrt -lkernel32 -Wl,/MANIFESTFILE:NUL --target=x86_64-pc-windows
-SDL_LDFLAGS := -lSDL2 -lcomdlg32 -luser32 -lshell32 -lole32 -ladvapi32 -ldwmapi -lwindowscodecs -lSDL2main
+SDL_LDFLAGS := -lSDL2 -lcomdlg32 -luser32 -lshell32 -lole32 -ladvapi32 -lbcrypt -ldwmapi -lwindowscodecs -lSDL2main
 GL_LDFLAGS := -lopengl32 
 ifneq ($(OPUS_ROOT),)
 SDL_CFLAGS += -DENABLE_REMOTE_OPUS -I$(OPUS_ROOT)/include

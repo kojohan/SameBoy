@@ -49,6 +49,35 @@ Build a PCM-only executable without compiling or linking Opus support:
 This build does not require or deploy `libopus-0.dll`. The remote host uses PCM
 by default; `--remote-audio opus` is unavailable in this executable.
 
+## Compact portable Windows release
+
+Create a clean, optimized and shareable ZIP with one command:
+
+```powershell
+.\build-portable-windows.ps1
+```
+
+The archive is written beside the script by default and its filename is ignored
+by Git. This keeps previous archives outside the `build` directory removed by a
+clean build. To publish directly to the test share with a recognizable name:
+
+```powershell
+.\build-portable-windows.ps1 `
+  -DestinationRoot "M:\SAME-LINKTEST\portable" `
+  -Label "protocol-v8"
+```
+
+Only the ZIP needs to be shared. The recipient extracts its `SameBoyLink`
+folder and starts `sameboy.exe`; no installation is required. The script always
+performs a clean `release` build, strips debug information through the normal
+Makefile release path, disables experimental Opus and verifies the finished ZIP.
+PCM Remote Play remains available.
+
+The archive contains the executable, SDL2, boot ROMs, normal shaders, palettes,
+menu background and license. It deliberately excludes `prefs.bin`, debugger
+symbols/text, Opus, manifests, diagnostic launchers and development scripts.
+Preferences and saves are created only by the recipient while using the app.
+
 `SAMEBOY_SDL2_ROOT` and `SAMEBOY_OPUS_ROOT` may be used instead of the matching
 parameters. The defaults are `C:\SDL2` and `C:\msys64\mingw64`.
 
@@ -205,11 +234,18 @@ model and observed link behavior when reporting a Local Link problem.
 
 ## LAN remote-input developer mode
 
-Start the host with a UDP port and a non-zero development session ID. This also
-enables the two-core Local Link mode:
+The normal LAN UI avoids all manual connection settings. P1 opens a ROM and
+chooses `Link > Host Remote Link…`; SameBoy detects its LAN address, creates a
+fresh internal session key and copies an endpoint/session invite. P2 copies that
+invite and chooses `Link > Join Remote Link…`. Use `Remote Settings…`
+only to override the advertised address for public-IP forwarding/VPNs or to
+reach the technical port, Session ID and manual join-address controls.
+
+For CLI automation or advanced diagnostics, `--remote-auto-pair` exercises the
+same first-client flow. This also enables the two-core Local Link mode:
 
 ```powershell
-.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 "C:\path\to\link-game.gb"
+.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 --remote-auto-pair "C:\path\to\link-game.gb"
 ```
 
 The host shows both native screens by default. To start with only P1 visible on
@@ -234,17 +270,19 @@ opens Video Options where Scaling Filter cycles through the same shader/filter
 set as ordinary SameBoy. `--nogl` forces the nearest/bilinear SDL renderer
 fallback for compatibility and regression testing.
 
-This direct-IP mode is development-only and currently has no authentication or
-encryption, so it should only be used on a trusted LAN. The client now displays
-the host's native P2 framebuffer and plays its P2 audio automatically. Protocol
-version 4 uses lossless pixel RLE by default and falls back to raw RGBA8 for any
+Protocol v8 automatically sends a fresh internal key to the first client and
+then rejects clients without it for the rest of that Host lifetime. The initial
+transfer and realtime datagrams are not encrypted. This direct-IP mode therefore
+remains development-only. The client displays the
+host's native P2 framebuffer and plays its P2 audio automatically. The current
+media path uses lossless pixel RLE by default and falls back to raw RGBA8 for any
 frame that would grow. Tetris DX measured roughly 14–22% of the raw video size
 (about 6–10 Mbit/s rather than 44 Mbit/s). Remote audio defaults to the
 uncompressed 48 kHz stereo 16-bit PCM reference (approximately 1.54 Mbit/s), or
 the host can select Opus Restricted Low Delay:
 
 ```powershell
-.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 --remote-audio opus "C:\path\to\link-game.gb"
+.\build\bin\SDL\sameboy.exe --remote-input-host 45900 --remote-session 424242 --remote-auto-pair --remote-audio opus "C:\path\to\link-game.gb"
 ```
 
 Both modes use 5 ms packets and the same adaptive jitter buffer. The client title
@@ -255,16 +293,17 @@ stage timings are written under `[SameBoy Link][timing]`.
 ## Temporary direct Internet test
 
 The current direct-IP protocol can be tested manually over the Internet, but it
-is not a public-release transport. It has no peer authentication or encryption.
-Anyone able to reach the forwarded UDP port can send traffic to it, and P2
-video/audio is not confidential. Use a fresh session ID, open only one test port,
+is not a public-release transport. Protocol v8 pairs and locks to the first
+client automatically, but an active observer could capture the plaintext key.
+Realtime datagrams are not encrypted, and P2 video/audio is not confidential.
+Use a fresh session, open only one test port,
 close the host afterward and remove the router forwarding rule immediately.
 
 On the host router, forward one UDP port to the host PC's private IPv4 address
 using the same internal and external port. Then start the host, for example:
 
 ```powershell
-.\build\bin\SDL\sameboy.exe --remote-input-host 45930 --remote-session 123456789 --remote-host-view p1 "C:\path\to\link-game.gb"
+.\build\bin\SDL\sameboy.exe --remote-input-host 45930 --remote-session 123456789 --remote-auto-pair --remote-host-view p1 "C:\path\to\link-game.gb"
 ```
 
 The client connects to the router's public IPv4 address and forwarded port:

@@ -4,7 +4,7 @@ This document is the high-level technical introduction for contributors. For the
 
 ## Current snapshot — 2026-08-19
 
-The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v6 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the protocol-v5 lossless native-framebuffer/adaptive-PCM media path. Protocol v6 retains that path and adds an explicit pre-media handshake plus visible connection and mismatch status; automated loopback/negative-path tests and physical two-PC connection-notice/bidirectional-reconnect tests pass. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Adaptive-PCM tuning, optional lower-bandwidth video, authentication, encryption and production-grade Internet connectivity remain planned work.
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v8 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the lossless native-framebuffer/adaptive-PCM media path. Protocol v8 retains that path and adds automatic first-client key transfer plus a session-lifetime client lock; automated loopback, second-client rejection and reconnect tests pass. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Stronger transport security, optional lower-bandwidth video and production-grade Internet connectivity remain planned work.
 
 ## 1. Why SameBoy
 
@@ -184,17 +184,33 @@ Keep audio identifiable per emulator core.
 
 Host local audio can select/mix P1 and P2. Remote Play normally sends the P2 stream to the client using small blocks and a deliberately bounded jitter buffer.
 
-Protocol v6 retains protocol v5's uncompressed 48 kHz stereo PCM and adaptive jitter buffer unchanged. Physical LAN and Internet testing of v5 found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
+Protocol v8 retains protocol v5's uncompressed 48 kHz stereo PCM and adaptive jitter buffer unchanged. Physical LAN and Internet testing of v5 found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
 
-Before sending input or accepting media, the v6 client sends a fixed-size
+Before sending input or accepting media, the v8 client sends a fixed-size
 bootstrap `Hello`. The host replies to that source endpoint with `Accepted`,
-`Session mismatch` or `Protocol mismatch`; only an accepted endpoint may send
+`Pairing`, `Session mismatch`, `Protocol mismatch` or `Authentication failed`; only an accepted endpoint may send
 input and clock packets. The client repeats this lightweight exchange every
 500 ms as connection liveness, changes to `Waiting` after 500 ms without an
 initial answer and returns to it after two seconds without a host response.
 Handshake replies use endpoint-specific sends so a mismatched probe cannot
-replace the active media peer. This exchange is a status/compatibility
-foundation, not authentication or encryption.
+replace the active media peer. Each menu-started Host lifetime generates a fresh
+128-bit internal key with Windows CNG. Before a client is locked, the host sends
+that key to the first requester in a `Pairing` response. The client confirms it
+with HMAC-SHA-256, after which requests without the key are rejected until Host
+ends. The client retains the key internally for reconnect; keys are never shown
+in the UI or written to diagnostics.
+
+The normal direct-IP UI does not expose a key. The copied bounded `SBLINK2`
+record contains only endpoint and Session ID; `Join Remote Link…` strictly
+parses those settings before launching P2. This is
+a development invitation sent through a trusted channel, not the future opaque,
+short-lived coordination-service invite.
+
+The initial key transfer is plaintext and individual input, clock, video and
+audio datagrams are not authenticated or encrypted. Pairing prevents ordinary
+later clients from taking over an established host session; it is not protection
+against an active network attacker. Stronger security remains a public-release
+task rather than complexity exposed in the current player flow.
 
 After the first accepted input packet, P1 receives a two-second dedicated
 `Player 2 connected` notice on the local primary framebuffer. The Remote Client
@@ -269,7 +285,7 @@ Portable transfer must be transactional: backup, temporary file, cryptographic h
 
 The user-facing target is zero manual network configuration.
 
-The current prototype has proven direct UDP play over the public Internet using manual public-IP entry and UDP port forwarding. That is a development test path only; it is not the intended user experience and does not yet provide session authentication or encryption.
+The current prototype has proven direct UDP play over the public Internet using manual public-IP entry and UDP port forwarding. That is a development test path only; it is not the intended user experience. Protocol v8 locks a Host lifetime to its automatically paired first client, but the initial key transfer and realtime datagrams are not encrypted.
 
 Connection establishment may combine:
 
@@ -362,7 +378,8 @@ Before public Internet release:
 - treat every packet and URL as untrusted;
 - validate packet lengths, protocol versions and session IDs;
 - use TLS for coordination APIs;
-- authenticate and encrypt realtime P2P/relay sessions;
+- replace protocol-v8's plaintext first-client pairing with a secure server-assisted or cryptographic pairing flow when public release requires it;
+- authenticate every realtime datagram, reject replay and encrypt P2P/relay traffic;
 - never accept arbitrary peer-provided filesystem paths;
 - never let an invite URL execute arbitrary commands;
 - do not deserialize arbitrary remote SameBoy save-state blobs in Remote Play mode.

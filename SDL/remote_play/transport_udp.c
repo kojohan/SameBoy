@@ -132,6 +132,63 @@ bool remote_udp_open_host(RemoteUdpSocket *transport,
     return true;
 }
 
+bool remote_udp_get_local_ipv4_endpoint(char *endpoint,
+                                        size_t endpoint_size,
+                                        uint16_t port)
+{
+    if (!endpoint || !endpoint_size || !port) return false;
+#ifdef _WIN32
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) return false;
+#endif
+    socket_handle_t socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_handle == INVALID_HANDLE_VALUE_FOR_SOCKET) {
+#ifdef _WIN32
+        WSACleanup();
+#endif
+        return false;
+    }
+
+    struct sockaddr_in route = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+    };
+    inet_pton(AF_INET, "8.8.8.8", &route.sin_addr);
+    bool success = connect(socket_handle,
+                           (const struct sockaddr *)&route,
+                           sizeof(route)) == 0;
+    struct sockaddr_in local = {0};
+#ifdef _WIN32
+    int local_size = sizeof(local);
+#else
+    socklen_t local_size = sizeof(local);
+#endif
+    if (success) {
+        success = getsockname(socket_handle,
+                              (struct sockaddr *)&local,
+                              &local_size) == 0;
+    }
+    char address[INET_ADDRSTRLEN];
+    if (success) {
+        success = inet_ntop(AF_INET,
+                            &local.sin_addr,
+                            address,
+                            sizeof(address)) != NULL &&
+            strcmp(address, "0.0.0.0") != 0 &&
+            strcmp(address, "127.0.0.1") != 0;
+    }
+    if (success) {
+        int length = snprintf(endpoint, endpoint_size, "%s:%u", address, port);
+        success = length >= 0 && (size_t)length < endpoint_size;
+    }
+
+    close_socket_handle(socket_handle);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+    return success;
+}
+
 static bool split_endpoint(const char *endpoint,
                            char *host,
                            size_t host_size,

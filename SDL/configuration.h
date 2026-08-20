@@ -181,6 +181,8 @@ typedef struct {
         uint8_t remote_client_filter;
         bool remote_client_muted;
         bool remote_client_fullscreen;
+        char remote_link_key[33];
+        char remote_link_advertised_endpoint[64];
     };
 } configuration_t;
 

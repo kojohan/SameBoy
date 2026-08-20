@@ -89,6 +89,8 @@ typedef enum {
     REMOTE_CLIENT_WAITING,
     REMOTE_CLIENT_SESSION_MISMATCH,
     REMOTE_CLIENT_PROTOCOL_MISMATCH,
+    REMOTE_CLIENT_AUTH_FAILED,
+    REMOTE_CLIENT_PAIRING,
     REMOTE_CLIENT_CONNECTED,
 } RemoteClientConnectionStatus;
 
@@ -100,9 +102,12 @@ typedef struct {
     uint64_t last_send_timestamp_us;
     uint64_t last_response_timestamp_us;
     uint16_t host_protocol_version;
+    uint8_t authentication_key[REMOTE_PLAY_AUTH_KEY_SIZE];
+    uint8_t client_nonce[REMOTE_PLAY_AUTH_NONCE_SIZE];
     RemoteClientConnectionStatus status;
     RemoteClientConnectionStatus logged_status;
     bool has_logged_status;
+    bool authentication_enabled;
 } RemoteClientHandshake;
 
 typedef struct {
@@ -240,6 +245,8 @@ static const char *connection_status_name(RemoteClientConnectionStatus status)
         case REMOTE_CLIENT_WAITING: return "waiting";
         case REMOTE_CLIENT_SESSION_MISMATCH: return "session_mismatch";
         case REMOTE_CLIENT_PROTOCOL_MISMATCH: return "protocol_mismatch";
+        case REMOTE_CLIENT_AUTH_FAILED: return "auth_failed";
+        case REMOTE_CLIENT_PAIRING: return "pairing";
         case REMOTE_CLIENT_CONNECTED: return "connected";
     }
     return "unknown";
@@ -252,6 +259,8 @@ static const char *connection_status_text(RemoteClientConnectionStatus status)
         case REMOTE_CLIENT_WAITING: return "Waiting for host";
         case REMOTE_CLIENT_SESSION_MISMATCH: return "Session mismatch";
         case REMOTE_CLIENT_PROTOCOL_MISMATCH: return "Protocol mismatch";
+        case REMOTE_CLIENT_AUTH_FAILED: return "Authentication failed";
+        case REMOTE_CLIENT_PAIRING: return "Pairing with host...";
         case REMOTE_CLIENT_CONNECTED: return "Connected";
     }
     return "Connection error";
@@ -396,9 +405,24 @@ static bool send_handshake(RemoteUdpSocket *transport,
         .protocol_version = REMOTE_PLAY_PROTOCOL_VERSION,
         .session_id = session_id,
         .request_id = handshake->request_id,
+        .authenticated = handshake->authentication_enabled,
     };
+    if (handshake->authentication_enabled) {
+        memcpy(hello.client_nonce, handshake->client_nonce, sizeof(hello.client_nonce));
+    }
     uint8_t encoded[REMOTE_PLAY_HANDSHAKE_HELLO_SIZE];
     remote_play_encode_handshake_hello(encoded, &hello);
+    if (handshake->authentication_enabled) {
+        uint8_t tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+        if (!remote_play_auth_hmac(tag,
+                                   handshake->authentication_key,
+                                   encoded,
+                                   REMOTE_PLAY_HANDSHAKE_HELLO_AUTH_SIZE)) {
+            return false;
+        }
+        memcpy(encoded + REMOTE_PLAY_HANDSHAKE_HELLO_AUTH_SIZE, tag, sizeof(tag));
+        memset(tag, 0, sizeof(tag));
+    }
     char error[128];
     if (!remote_udp_send(transport, encoded, sizeof(encoded), error, sizeof(error))) {
         fprintf(stderr,
@@ -1238,7 +1262,51 @@ static void receive_remote_packets(RemoteUdpSocket *transport,
             response.request_id == handshake->request_id) {
             handshake->host_protocol_version = response.protocol_version;
             handshake->last_response_timestamp_us = receive_timestamp_us;
-            if (response.status == REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH) {
+            if (response.status == REMOTE_PLAY_HANDSHAKE_PAIRING) {
+                memcpy(handshake->authentication_key,
+                       response.pairing_key,
+                       sizeof(handshake->authentication_key));
+                if (!remote_play_auth_random(handshake->client_nonce,
+                                             sizeof(handshake->client_nonce))) {
+                    memset(handshake->authentication_key,
+                           0,
+                           sizeof(handshake->authentication_key));
+                    handshake->authentication_enabled = false;
+                    set_connection_status(handshake, REMOTE_CLIENT_AUTH_FAILED);
+                    continue;
+                }
+                handshake->authentication_enabled = true;
+                handshake->last_send_timestamp_us = 0;
+                remote_play_auth_format_key_hex(configuration.remote_link_key,
+                                                handshake->authentication_key);
+                set_connection_status(handshake, REMOTE_CLIENT_PAIRING);
+                continue;
+            }
+            bool authentication_valid =
+                response.authenticated == handshake->authentication_enabled;
+            if (authentication_valid && handshake->authentication_enabled) {
+                uint8_t expected_tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+                uint8_t authentication_data[REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_DATA_SIZE];
+                memcpy(authentication_data,
+                       encoded,
+                       REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE);
+                memcpy(authentication_data + REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE,
+                       handshake->client_nonce,
+                       REMOTE_PLAY_AUTH_NONCE_SIZE);
+                authentication_valid =
+                    remote_play_auth_hmac(expected_tag,
+                                          handshake->authentication_key,
+                                          authentication_data,
+                                          sizeof(authentication_data)) &&
+                    remote_play_auth_tags_equal(expected_tag, response.auth_tag);
+                memset(expected_tag, 0, sizeof(expected_tag));
+                memset(authentication_data, 0, sizeof(authentication_data));
+            }
+            if (response.status == REMOTE_PLAY_HANDSHAKE_AUTH_FAILED ||
+                !authentication_valid) {
+                set_connection_status(handshake, REMOTE_CLIENT_AUTH_FAILED);
+            }
+            else if (response.status == REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH) {
                 set_connection_status(handshake, REMOTE_CLIENT_SESSION_MISMATCH);
             }
             else if (response.status == REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH ||
@@ -1635,7 +1703,10 @@ static int remote_client_network_thread(void *userdata)
     return 0;
 }
 
-int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disable_gl)
+int remote_play_client_run(const char *endpoint,
+                           uint32_t session_id,
+                           const char *key_hex,
+                           bool disable_gl)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0) {
         fprintf(stderr, "Could not initialize SDL remote input client: %s\n", SDL_GetError());
@@ -1643,6 +1714,20 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     }
     client_start_time_us = monotonic_time_us();
     connect_joypad();
+
+    RemoteClientHandshake handshake = {
+        .status = REMOTE_CLIENT_CONNECTING,
+    };
+    if (key_hex && key_hex[0]) {
+        if (!remote_play_auth_parse_key(handshake.authentication_key, key_hex) ||
+            !remote_play_auth_random(handshake.client_nonce,
+                                     sizeof(handshake.client_nonce))) {
+            fprintf(stderr, "Invalid session key or authentication unavailable\n");
+            SDL_Quit();
+            return 1;
+        }
+        handshake.authentication_enabled = true;
+    }
 
     RemoteUdpSocket transport;
     char error[128];
@@ -1770,10 +1855,11 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     bool reupload_video_frame = false;
 
     fprintf(stderr,
-            "[SameBoy Link][frontend] remote_input_client target=%s session=%u protocol=%u\n",
+            "[SameBoy Link][frontend] remote_input_client target=%s session=%u protocol=%u auth=%s\n",
             endpoint,
             session_id,
-            REMOTE_PLAY_PROTOCOL_VERSION);
+            REMOTE_PLAY_PROTOCOL_VERSION,
+            handshake.authentication_enabled? "enabled" : "disabled");
     fprintf(stderr,
             "[SameBoy Link][video] remote_client_presentation=%s filter=%s vsync=%s swap_interval=%d\n",
             client_gl_context? "OpenGL" : "SDL",
@@ -1799,9 +1885,6 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     RemoteVideoReceiver video = {0};
     RemoteAudioReceiver audio = {0};
     RemoteClockSync clock_sync = {0};
-    RemoteClientHandshake handshake = {
-        .status = REMOTE_CLIENT_CONNECTING,
-    };
     RemoteLatencyStats latency = {0};
     set_connection_status(&handshake, REMOTE_CLIENT_CONNECTING);
     open_audio_device(&audio, 48000);
@@ -2352,6 +2435,8 @@ int remote_play_client_run(const char *endpoint, uint32_t session_id, bool disab
     }
     SDL_DestroyWindow(client_window);
     remote_udp_close(&transport);
+    memset(handshake.authentication_key, 0, sizeof(handshake.authentication_key));
+    memset(handshake.client_nonce, 0, sizeof(handshake.client_nonce));
     if (!disconnected_to_frontend) {
         SDL_Quit();
         return 0;

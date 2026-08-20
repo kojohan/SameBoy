@@ -2,11 +2,11 @@
 
 A Windows-focused SameBoy fork for simple local and Internet Game Boy / Game Boy Color Link Cable multiplayer.
 
-## Implementation checkpoint — 2026-08-19
+## Implementation checkpoint — 2026-08-20
 
-The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v6 adds an explicit status/compatibility handshake to protocol v5's full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, dedicated client network thread, latency telemetry and reduced video datagram count. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 v5 session.
+The reproducible Windows build, multi-instance session layer, Local Link MVP and LAN Remote Play MVP are complete. The normal SDL frontend now exposes explicit single-player, Local Link, Remote Host and Remote Client modes, menu-driven direct-IP Host/Join/Disconnect, persistent independent P1/P2 keyboard/controller mappings and a client Escape menu for local settings. Protocol v8 adds automatic first-client pairing and a session-lifetime client lock to full-state Player 2 input, lossless native-framebuffer streaming, adaptive 48 kHz stereo PCM, a dedicated client network thread, latency telemetry and reduced video datagram count. Tetris for Game Boy and Tetris DX for Game Boy Color have exercised the local and remote paths, including a successful five-minute direct public-IPv4 media test.
 
-PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Protocol v6 retains protocol v5's accepted zero-queue 1,280-byte Wi-Fi media baseline and now shows connecting, waiting, session mismatch, protocol mismatch, connected and per-player disconnect feedback instead of an unexplained empty client frame. See `REMOTE_PLAY_PERFORMANCE_PLAN.md` before authenticated/encrypted sessions and zero-configuration Internet connectivity.
+PCM is the stable audio path. Opus remains experimental and is deferred after producing worse real-world behavior in the current prototype. The UI/session boundary defined in `LINK_UI_ARCHITECTURE.md` and its physical two-PC four-mode regression are complete. Full client shader/filter reuse is complete. Protocol v8 retains the accepted zero-queue 1,280-byte Wi-Fi media baseline and now shows connecting, waiting, pairing, mismatch, rejection, connected and per-player disconnect feedback. Keys are completely internal; stronger transport security remains required before public release.
 
 ## Product direction
 
@@ -371,7 +371,7 @@ After Local Link works, the next Internet-specific task is **remote Player 2 inp
 
 ## Next implementation tasks
 
-1. Complete the remaining fixed-role Ethernet/Wi-Fi performance matrix using the physically verified schema-v4 timing windows.
-2. Compare all repetitions against the existing latency, loss, audio-arrival and presentation gates; add priority scheduling or chunk pacing only for a repeatable measured fault.
-3. Build session authentication and encryption on the v6 handshake before treating direct Internet play as a public feature.
-4. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.
+1. Physically verify protocol-v8 one-click pairing and the first-client lock.
+2. Replace manual IP/port forwarding with coordination, NAT traversal and relay fallback.
+3. Add priority scheduling, chunk pacing or further buffering only for a repeatable measured fault.
+4. Add stronger pairing/per-packet security when moving from development transport toward public release.

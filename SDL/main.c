@@ -1501,6 +1501,8 @@ static bool start_remote_host_session(void)
                                 &game_session,
                                 configuration.remote_link_port,
                                 configuration.remote_link_session_id,
+                                NULL,
+                                true,
                                 error,
                                 sizeof(error))) {
         game_session_end_mode(&game_session);
@@ -1960,11 +1962,13 @@ static void print_usage(const char *program)
     fprintf(stderr,
             "Usage: %s [--fullscreen|-f] [--nogl] [--local-link] "
             "[--remote-input-host <port>] [--remote-session <id>] "
+            "[--remote-key <32hex>] "
+            "[--remote-auto-pair] "
             "[--remote-audio <pcm|opus>] [--remote-host-view <p1|both>] "
             "[--stop-debugger|-s] [--model <model>] <rom>\n",
             program);
     fprintf(stderr,
-            "       %s --remote-input-client <host:port> [--remote-session <id>]\n",
+            "       %s --remote-input-client <host:port> [--remote-session <id>] [--remote-key <32hex>]\n",
             program);
 }
 
@@ -2085,8 +2089,10 @@ int main(int argc, char **argv)
     const char *remote_host_port_string = get_arg_option("--remote-input-host", &argc, argv);
     const char *remote_client_endpoint = get_arg_option("--remote-input-client", &argc, argv);
     const char *remote_session_string = get_arg_option("--remote-session", &argc, argv);
+    const char *remote_key_string = get_arg_option("--remote-key", &argc, argv);
     const char *remote_audio_string = get_arg_option("--remote-audio", &argc, argv);
     const char *remote_host_view_string = get_arg_option("--remote-host-view", &argc, argv);
+    bool remote_auto_pair = get_arg_flag("--remote-auto-pair", &argc, argv);
     bool fullscreen = get_arg_flag("--fullscreen", &argc, argv) || get_arg_flag("-f", &argc, argv);
     bool nogl = get_arg_flag("--nogl", &argc, argv);
     stop_on_start = get_arg_flag("--stop-debugger", &argc, argv) || get_arg_flag("-s", &argc, argv);
@@ -2106,6 +2112,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "Invalid remote session ID: %s\n", remote_session_string);
         print_usage(argv[0]);
         return 1;
+    }
+
+    if (remote_key_string) {
+        uint8_t parsed_key[REMOTE_PLAY_AUTH_KEY_SIZE];
+        bool valid_key = remote_play_auth_parse_key(parsed_key, remote_key_string);
+        memset(parsed_key, 0, sizeof(parsed_key));
+        if (!valid_key) {
+            fprintf(stderr, "Invalid remote session key; use exactly 32 hexadecimal characters.\n");
+            print_usage(argv[0]);
+            return 1;
+        }
     }
 
     uint8_t remote_audio_codec = REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE;
@@ -2142,6 +2159,7 @@ int main(int argc, char **argv)
 
     if (remote_client_endpoint) {
         if (local_link_requested || remote_host_port_string || remote_audio_string ||
+            remote_auto_pair ||
             remote_host_view_string || argc != 1) {
             print_usage(argv[0]);
             return 1;
@@ -2168,6 +2186,21 @@ int main(int argc, char **argv)
     }
     if (remote_host_view_string && !remote_host_port_string) {
         fprintf(stderr, "Remote host view selection requires --remote-input-host.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (remote_key_string && !remote_host_port_string && !remote_client_endpoint) {
+        fprintf(stderr, "Remote session key requires remote host or client mode.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (remote_auto_pair && !remote_host_port_string) {
+        fprintf(stderr, "Automatic pairing requires --remote-input-host.\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (remote_auto_pair && remote_key_string) {
+        fprintf(stderr, "Use either --remote-auto-pair or --remote-key, not both.\n");
         print_usage(argv[0]);
         return 1;
     }
@@ -2215,6 +2248,8 @@ int main(int argc, char **argv)
                                     &game_session,
                                     remote_host_port,
                                     remote_session_id,
+                                    remote_key_string,
+                                    remote_auto_pair,
                                     error,
                                     sizeof(error))) {
             fprintf(stderr, "Could not start remote input host: %s\n", error);
@@ -2254,6 +2289,16 @@ int main(int argc, char **argv)
         configuration.audio_driver[15] = 0;
         configuration.dmg_palette_name[24] = 0;
         configuration.remote_link_endpoint[sizeof(configuration.remote_link_endpoint) - 1] = 0;
+        configuration.remote_link_advertised_endpoint[
+            sizeof(configuration.remote_link_advertised_endpoint) - 1] = 0;
+        configuration.remote_link_key[sizeof(configuration.remote_link_key) - 1] = 0;
+        if (configuration.remote_link_key[0]) {
+            uint8_t parsed_key[REMOTE_PLAY_AUTH_KEY_SIZE];
+            if (!remote_play_auth_parse_key(parsed_key, configuration.remote_link_key)) {
+                configuration.remote_link_key[0] = 0;
+            }
+            memset(parsed_key, 0, sizeof(parsed_key));
+        }
         if (!configuration.remote_link_endpoint[0]) {
             snprintf(configuration.remote_link_endpoint,
                      sizeof(configuration.remote_link_endpoint),
@@ -2302,6 +2347,8 @@ int main(int argc, char **argv)
     if (remote_client_endpoint) {
         int client_result = remote_play_client_run(remote_client_endpoint,
                                                    remote_session_id,
+                                                   remote_key_string? remote_key_string :
+                                                       configuration.remote_link_key,
                                                    nogl);
         if (client_result != REMOTE_PLAY_CLIENT_DISCONNECTED) {
             return client_result;

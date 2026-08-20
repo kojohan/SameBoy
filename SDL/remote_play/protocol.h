@@ -4,9 +4,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define REMOTE_PLAY_PROTOCOL_VERSION 6
-#define REMOTE_PLAY_HANDSHAKE_HELLO_SIZE 24
-#define REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE 32
+#include "auth.h"
+
+#define REMOTE_PLAY_PROTOCOL_VERSION 8
+#define REMOTE_PLAY_HANDSHAKE_HELLO_AUTH_SIZE 36
+#define REMOTE_PLAY_HANDSHAKE_HELLO_SIZE 56
+#define REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE 60
+#define REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_DATA_SIZE \
+    (REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE + REMOTE_PLAY_AUTH_NONCE_SIZE)
+#define REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE 80
 #define REMOTE_PLAY_INPUT_PACKET_SIZE 36
 #define REMOTE_PLAY_CLOCK_SYNC_PING_SIZE 24
 #define REMOTE_PLAY_CLOCK_SYNC_PONG_SIZE 40
@@ -39,12 +45,17 @@ typedef enum {
     REMOTE_PLAY_HANDSHAKE_ACCEPTED = 1,
     REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH = 2,
     REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH = 3,
+    REMOTE_PLAY_HANDSHAKE_AUTH_FAILED = 4,
+    REMOTE_PLAY_HANDSHAKE_PAIRING = 5,
 } RemotePlayHandshakeStatus;
 
 typedef struct {
     uint16_t protocol_version;
     uint32_t session_id;
     uint64_t request_id;
+    uint8_t client_nonce[REMOTE_PLAY_AUTH_NONCE_SIZE];
+    uint8_t auth_tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+    bool authenticated;
 } RemotePlayHandshakeHello;
 
 typedef struct {
@@ -52,7 +63,11 @@ typedef struct {
     uint32_t session_id;
     uint64_t request_id;
     uint64_t host_id;
+    uint8_t host_nonce[REMOTE_PLAY_AUTH_NONCE_SIZE];
+    uint8_t pairing_key[REMOTE_PLAY_AUTH_KEY_SIZE];
+    uint8_t auth_tag[REMOTE_PLAY_AUTH_TAG_SIZE];
     RemotePlayHandshakeStatus status;
+    bool authenticated;
 } RemotePlayHandshakeResponse;
 
 typedef struct {

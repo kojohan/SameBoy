@@ -372,20 +372,20 @@ lossless reference's correctness.
 ### P5 — controlled impairment and Internet readiness
 
 After P1–P4 pass physical LAN gates, add deterministic delay/jitter/loss tests,
-repeat the direct-Internet run and set quality adaptation thresholds. Session
-authentication/encryption and safe coordination remain mandatory before any
-public-facing Internet release.
+repeat the direct-Internet run and set quality adaptation thresholds. Protocol
+v8 now locks a Host lifetime to its automatically paired first client. Stronger
+pairing, per-datagram protection, encryption and safe coordination remain
+mandatory before any public-facing Internet release.
 
 ## Recommended implementation order
 
-1. Complete the remaining fixed-role Ethernet/Wi-Fi baseline repetitions using the physically verified schema-v4 timing windows.
-2. Compare the matrix against the P0-P3 gates; revisit PCM, priority scheduling or chunk pacing only if an audible, visible or repeatable measurable need appears.
-3. Benchmark lower-bandwidth lossless/delta transport only after the latency gates remain stable.
-4. Run controlled impairment and longer Internet regressions.
+1. Keep the accepted media baseline unchanged while protocol-v8 one-click pairing is physically verified.
+2. Continue coordination/NAT traversal work after that focused two-PC regression.
+3. Resume the remaining matrix, PCM tuning, priority scheduling or chunk pacing only if an audible, visible or repeatable measurable need appears.
+4. Revisit stronger transport security before public release.
 
-Protocol v6's handshake, peer notices and reconnect lifecycle have now passed
-physical two-PC testing. Use the clean `protocol-v6-baseline-matrix-v2` build and
-start `start-performance-baseline.cmd` on both machines for the next matrix.
-Choose the same setup and repetition on each machine; the launcher generates a
-matching test label while the existing logger records the actual role, network
-adapter, executable hash and unique launch ID independently.
+Protocol v6's handshake, peer notices and reconnect lifecycle passed physical
+two-PC testing, and the first corrected Ethernet/Ethernet matrix run supplied
+enough evidence to pause broad performance testing. Protocol v8 now adds
+automatic first-client pairing. The baseline launcher remains available when a
+repeatable fault or later security regression requires comparable measurements.

@@ -51,6 +51,8 @@ static const char *handshake_status_name(RemotePlayHandshakeStatus status)
         case REMOTE_PLAY_HANDSHAKE_ACCEPTED: return "accepted";
         case REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH: return "session_mismatch";
         case REMOTE_PLAY_HANDSHAKE_PROTOCOL_MISMATCH: return "protocol_mismatch";
+        case REMOTE_PLAY_HANDSHAKE_AUTH_FAILED: return "auth_failed";
+        case REMOTE_PLAY_HANDSHAKE_PAIRING: return "pairing";
     }
     return "unknown";
 }
@@ -59,11 +61,33 @@ bool remote_play_host_start(RemotePlayHost *host,
                             GameSession *session,
                             uint16_t port,
                             uint32_t session_id,
+                            const char *key_hex,
+                            bool automatic_pairing,
                             char *error,
                             size_t error_size)
 {
     memset(host, 0, sizeof(*host));
+    if (automatic_pairing) {
+        if (!remote_play_auth_random(host->authentication_key,
+                                     sizeof(host->authentication_key)) ||
+            !remote_play_auth_random(host->host_nonce, sizeof(host->host_nonce))) {
+            snprintf(error, error_size, "Automatic client pairing is unavailable");
+            return false;
+        }
+        host->authentication_enabled = true;
+        host->automatic_pairing = true;
+    }
+    else if (key_hex && key_hex[0]) {
+        if (!remote_play_auth_parse_key(host->authentication_key, key_hex) ||
+            !remote_play_auth_random(host->host_nonce, sizeof(host->host_nonce))) {
+            snprintf(error, error_size, "Invalid session key or authentication unavailable");
+            return false;
+        }
+        host->authentication_enabled = true;
+    }
     if (session_id == 0 || !remote_udp_open_host(&host->transport, port, error, error_size)) {
+        memset(host->authentication_key, 0, sizeof(host->authentication_key));
+        memset(host->host_nonce, 0, sizeof(host->host_nonce));
         return false;
     }
 
@@ -75,10 +99,12 @@ bool remote_play_host_start(RemotePlayHost *host,
     host->audio_codec = REMOTE_PLAY_AUDIO_CODEC_PCM_S16LE;
     host->active = true;
     sameboy_link_log(SAMEBOY_LINK_LOG_FRONTEND,
-                     "remote_input_host listening_udp_port=%u session=%u protocol=%u",
+                     "remote_input_host listening_udp_port=%u session=%u protocol=%u auth=%s pairing=%s",
                      port,
                      session_id,
-                     REMOTE_PLAY_PROTOCOL_VERSION);
+                     REMOTE_PLAY_PROTOCOL_VERSION,
+                     host->authentication_enabled? "enabled" : "disabled",
+                     host->automatic_pairing? "automatic" : "manual");
     return true;
 }
 
@@ -117,6 +143,36 @@ void remote_play_host_poll(RemotePlayHost *host)
             else if (hello.session_id != host->session_id) {
                 status = REMOTE_PLAY_HANDSHAKE_SESSION_MISMATCH;
             }
+            else if (host->automatic_pairing && !host->handshake_complete &&
+                     !hello.authenticated) {
+                status = REMOTE_PLAY_HANDSHAKE_PAIRING;
+            }
+            else if (host->automatic_pairing && !host->handshake_complete &&
+                     hello.authenticated) {
+                uint8_t expected_tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+                if (!remote_play_auth_hmac(expected_tag,
+                                           host->authentication_key,
+                                           data,
+                                           REMOTE_PLAY_HANDSHAKE_HELLO_AUTH_SIZE) ||
+                    !remote_play_auth_tags_equal(expected_tag, hello.auth_tag)) {
+                    status = REMOTE_PLAY_HANDSHAKE_PAIRING;
+                }
+                memset(expected_tag, 0, sizeof(expected_tag));
+            }
+            else if (hello.authenticated != host->authentication_enabled) {
+                status = REMOTE_PLAY_HANDSHAKE_AUTH_FAILED;
+            }
+            else if (host->authentication_enabled) {
+                uint8_t expected_tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+                if (!remote_play_auth_hmac(expected_tag,
+                                           host->authentication_key,
+                                           data,
+                                           REMOTE_PLAY_HANDSHAKE_HELLO_AUTH_SIZE) ||
+                    !remote_play_auth_tags_equal(expected_tag, hello.auth_tag)) {
+                    status = REMOTE_PLAY_HANDSHAKE_AUTH_FAILED;
+                }
+                memset(expected_tag, 0, sizeof(expected_tag));
+            }
 
             if (status == REMOTE_PLAY_HANDSHAKE_ACCEPTED) {
                 bool initial_client = !host->handshake_complete;
@@ -146,9 +202,39 @@ void remote_play_host_poll(RemotePlayHost *host)
                 .request_id = hello.request_id,
                 .host_id = host->host_id,
                 .status = status,
+                .authenticated = host->authentication_enabled &&
+                    status != REMOTE_PLAY_HANDSHAKE_PAIRING,
             };
+            if (status == REMOTE_PLAY_HANDSHAKE_PAIRING) {
+                memcpy(response.pairing_key,
+                       host->authentication_key,
+                       sizeof(response.pairing_key));
+            }
+            else if (response.authenticated) {
+                memcpy(response.host_nonce, host->host_nonce, sizeof(response.host_nonce));
+            }
             uint8_t encoded[REMOTE_PLAY_HANDSHAKE_RESPONSE_SIZE];
             remote_play_encode_handshake_response(encoded, &response);
+            if (response.authenticated) {
+                uint8_t tag[REMOTE_PLAY_AUTH_TAG_SIZE];
+                uint8_t authentication_data[REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_DATA_SIZE];
+                memcpy(authentication_data,
+                       encoded,
+                       REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE);
+                memcpy(authentication_data + REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE,
+                       hello.client_nonce,
+                       REMOTE_PLAY_AUTH_NONCE_SIZE);
+                if (remote_play_auth_hmac(tag,
+                                          host->authentication_key,
+                                          authentication_data,
+                                          sizeof(authentication_data))) {
+                    memcpy(encoded + REMOTE_PLAY_HANDSHAKE_RESPONSE_AUTH_SIZE,
+                           tag,
+                           sizeof(tag));
+                }
+                memset(tag, 0, sizeof(tag));
+                memset(authentication_data, 0, sizeof(authentication_data));
+            }
             if (remote_udp_send_to(&host->transport,
                                    &sender,
                                    encoded,
@@ -697,5 +783,7 @@ void remote_play_host_stop(RemotePlayHost *host)
         host->audio_encoder = NULL;
     }
 #endif
+    memset(host->authentication_key, 0, sizeof(host->authentication_key));
+    memset(host->host_nonce, 0, sizeof(host->host_nonce));
     host->active = false;
 }
