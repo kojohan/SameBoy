@@ -68,6 +68,7 @@ typedef struct {
     uint32_t last_response_sequence;
     uint64_t last_send_timestamp_us;
     uint64_t responses;
+    uint64_t offset_updates;
     uint64_t min_rtt_us;
     double smoothed_rtt_us;
     double jitter_us;
@@ -468,6 +469,7 @@ static void receive_clock_sync_pong(RemoteClockSync *clock_sync,
         clock_sync->min_rtt_us = rtt_us;
         clock_sync->smoothed_rtt_us = rtt_us;
         clock_sync->host_minus_client_us = sample_offset;
+        clock_sync->offset_updates = 1;
         clock_sync->synchronized = true;
     }
     else {
@@ -477,24 +479,25 @@ static void receive_clock_sync_pong(RemoteClockSync *clock_sync,
         clock_sync->smoothed_rtt_us += (rtt_us - clock_sync->smoothed_rtt_us) / 8.0;
         if (rtt_us < clock_sync->min_rtt_us) {
             clock_sync->min_rtt_us = rtt_us;
-            clock_sync->host_minus_client_us = sample_offset;
         }
-        else if (rtt_us <= clock_sync->min_rtt_us + 250) {
-            clock_sync->host_minus_client_us =
-                (clock_sync->host_minus_client_us * 7 + sample_offset) / 8;
+        if (rtt_us <= clock_sync->smoothed_rtt_us) {
+            clock_sync->host_minus_client_us +=
+                (sample_offset - clock_sync->host_minus_client_us) / 16;
+            clock_sync->offset_updates++;
         }
     }
     clock_sync->last_response_sequence = packet->sequence;
     clock_sync->responses++;
     if (clock_sync->responses == 1 || clock_sync->responses % 10 == 0) {
         fprintf(stderr,
-                "[SameBoy Link][timing] remote_clock_sync_client samples=%llu t_ms=%llu rtt_ms=%.3f jitter_ms=%.3f min_rtt_ms=%.3f offset_us=%lld uncertainty_ms=%.3f\n",
+                "[SameBoy Link][timing] remote_clock_sync_client samples=%llu t_ms=%llu rtt_ms=%.3f jitter_ms=%.3f min_rtt_ms=%.3f offset_us=%lld offset_updates=%llu uncertainty_ms=%.3f\n",
                 (unsigned long long)clock_sync->responses,
                 (unsigned long long)client_elapsed_ms(),
                 clock_sync->smoothed_rtt_us / 1000.0,
                 clock_sync->jitter_us / 1000.0,
                 clock_sync->min_rtt_us / 1000.0,
                 (long long)clock_sync->host_minus_client_us,
+                (unsigned long long)clock_sync->offset_updates,
                 clock_sync->min_rtt_us / 2000.0);
     }
 }

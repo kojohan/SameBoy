@@ -229,6 +229,37 @@ future test exposes a repeatable audible fault.
    heard/seen result; do not add buffering to eliminate an inaudible isolated
    underflow or a shutdown-tail event.
 
+## Test G1 — protocol-v6 Ethernet/Ethernet matrix run 1
+
+The first clean protocol-v6 matrix run used the desktop as 1 Gbit/s Ethernet
+host and the laptop as 1 Gbit/s Ethernet client. Matching executable hashes and
+source commit `5197fc65905e` were recorded. Active media ran for approximately
+556.8 seconds, exceeding the five-minute requirement.
+
+| Client measurement | Result |
+|---|---:|
+| Video completed / dropped / rejected | 33,256 / 0 / 0 |
+| Video presented / superseded | 33,221 / 35 (0.11%) |
+| Audio packets received / dropped / stale | 111,361 / 0 / 0 |
+| Audio arrival average / p95 / p99 / maximum | 5.014 / 18 / 19 / 188.604 ms |
+| Audio underflows / trims | 7 / 18 |
+| Input-to-present average / p95 / maximum | 28.739 / 36.558 / 58.416 ms |
+| Present-call average / maximum / slow | 0.101 / 0.771 ms / 0 |
+
+The run exposed a telemetry defect before the matrix could be accepted. The
+client's cross-machine clock offset stayed unchanged for almost 400 seconds
+because it was updated only by a new all-time-minimum RTT sample. Reported
+video-network time therefore drifted from roughly 1 to 27 ms and jumped back
+when a 0.075 ms lower RTT changed the offset estimate by 25.1 ms. Local
+input-to-present time, receive span and packet counters were unaffected, but
+the run is not a valid long-duration video-network baseline.
+
+The clock estimator now keeps the all-time minimum only for uncertainty while
+updating offset gradually from RTT samples at or below the current smoothed
+RTT. This follows slow physical clock drift without accepting the most delayed
+half of samples. The matrix restarts with a newly checksummed build after
+automated regression and a physical confirmation that offset updates continue.
+
 ## Optimization plan
 
 ### P0 — reproducible performance gate and richer telemetry

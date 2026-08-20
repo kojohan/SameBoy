@@ -990,3 +990,14 @@ still detected independently, and completed logs are copied to the NAS only
 after shutdown. Published builds now include both baseline-launcher files.
 The clean matrix runtime and tooling bundle is published as
 `M:\SAME-LINKTEST\builds\protocol-v6-baseline-matrix-v2`.
+
+The first Ethernet/Ethernet repetition ran for 556.8 active seconds with
+matching clean-build hashes, zero missing media packets, 0.11% superseded video
+frames and 28.739/36.558/58.416 ms average/p95/maximum input-to-present latency.
+It also revealed that cross-machine clock offset was held until a new all-time
+minimum RTT sample: after almost 400 seconds the estimate jumped 25.1 ms, making
+the otherwise steadily rising `video_network_ms` clearly measurement drift
+rather than network queue growth. The clock estimator now retains minimum RTT
+for uncertainty but continuously smooths offset from the lower-delay half of
+samples. Run 1 remains useful transport/audio/total-latency evidence but must be
+repeated for the corrected long-duration video-network baseline.

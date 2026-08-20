@@ -250,9 +250,11 @@ function Invoke-RemoteLoopback {
                         -Description "$Name audio stream" `
                         -Process $clientTest.Process `
                         -Timeout $TimeoutSeconds
-        Assert-LogPattern -Path $clientTest.StderrPath `
-                          -Pattern "remote_clock_sync_client samples=[1-9][0-9]* t_ms=[0-9]+ rtt_ms=.*jitter_ms=" `
-                          -Description "$Name timestamped clock telemetry"
+        Wait-LogPattern -Path $clientTest.StderrPath `
+                        -Pattern "remote_clock_sync_client samples=20 .*offset_updates=([2-9]|[1-9][0-9]+)" `
+                        -Description "$Name continuously updated clock telemetry" `
+                        -Process $clientTest.Process `
+                        -Timeout $TimeoutSeconds
 
         Assert-LogPattern -Path $clientTest.StderrPath `
                           -Pattern "remote_client_presentation=$ExpectedPresentation" `
