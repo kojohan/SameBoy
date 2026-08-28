@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <dirent.h>
 #include <ctype.h>
 #include "open_dialog/open_dialog.h"
@@ -11,6 +12,8 @@
 #include "gui.h"
 #include "font.h"
 #include "audio/audio.h"
+#include "remote_play/auth.h"
+#include "remote_play/transport_udp.h"
 
 #ifdef _WIN32
 #include <dwmapi.h>
@@ -51,7 +54,7 @@ void render_texture(void *pixels,  void *previous)
 {
     if (renderer) {
         if (pixels) {
-            SDL_UpdateTexture(texture, NULL, pixels, GB_get_screen_width(&gb) * sizeof (uint32_t));
+            SDL_UpdateTexture(texture, NULL, pixels, current_presentation_width() * sizeof (uint32_t));
         }
         SDL_RenderClear(renderer);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
@@ -65,15 +68,15 @@ void render_texture(void *pixels,  void *previous)
             mode = GB_FRAME_BLENDING_MODE_DISABLED;
         }
         else if (mode == GB_FRAME_BLENDING_MODE_ACCURATE) {
-            if (GB_is_sgb(&gb)) {
+            if (GB_is_sgb(current_gameboy())) {
                 mode = GB_FRAME_BLENDING_MODE_SIMPLE;
             }
             else {
-                mode = GB_is_odd_frame(&gb)? GB_FRAME_BLENDING_MODE_ACCURATE_ODD : GB_FRAME_BLENDING_MODE_ACCURATE_EVEN;
+                mode = GB_is_odd_frame(current_gameboy())? GB_FRAME_BLENDING_MODE_ACCURATE_ODD : GB_FRAME_BLENDING_MODE_ACCURATE_EVEN;
             }
         }
         render_bitmap_with_shader(&shader, pixels, previous,
-                                  GB_get_screen_width(&gb), GB_get_screen_height(&gb),
+                                  current_presentation_width(), current_presentation_height(),
                                   rect.x, rect.y, rect.w, rect.h,
                                   mode);
         SDL_GL_SwapWindow(window);
@@ -119,8 +122,8 @@ void update_viewport(void)
     SDL_GetWindowSize(window, &logical_width, &logical_height);
     factor = win_width / logical_width;
     
-    double x_factor = win_width / (double) GB_get_screen_width(&gb);
-    double y_factor = win_height / (double) GB_get_screen_height(&gb);
+    double x_factor = win_width / (double)current_presentation_width();
+    double y_factor = win_height / (double)current_presentation_height();
     
     if (configuration.scaling_mode == GB_SDL_SCALING_INTEGER_FACTOR) {
         x_factor = (unsigned)(x_factor);
@@ -136,8 +139,8 @@ void update_viewport(void)
         }
     }
     
-    unsigned new_width = x_factor * GB_get_screen_width(&gb);
-    unsigned new_height = y_factor * GB_get_screen_height(&gb);
+    unsigned new_width = x_factor * current_presentation_width();
+    unsigned new_height = y_factor * current_presentation_height();
     
     rect = (SDL_Rect){(win_width  - new_width) / 2, (win_height - new_height) /2,
         new_width, new_height};
@@ -152,7 +155,7 @@ void update_viewport(void)
 
 static void rescale_window(void)
 {
-    SDL_SetWindowSize(window, GB_get_screen_width(&gb) * configuration.default_scale, GB_get_screen_height(&gb) * configuration.default_scale);
+    SDL_SetWindowSize(window, current_presentation_width() * configuration.default_scale, current_presentation_height() * configuration.default_scale);
 }
 
 static void draw_char(uint32_t *buffer, unsigned width, unsigned height, unsigned char ch, uint32_t color, uint32_t *mask_top, uint32_t *mask_bottom)
@@ -192,7 +195,7 @@ static void draw_unbordered_text(uint32_t *buffer, unsigned width, unsigned heig
         y -= scroll;
     }
     unsigned orig_x = x;
-    unsigned y_offset = is_osd? 0 : (GB_get_screen_height(&gb) - 144) / 2;
+    unsigned y_offset = is_osd? 0 : (GB_get_screen_height(current_gameboy()) - 144) / 2;
     while (*string) {
         if (*string == '\n') {
             x = orig_x;
@@ -205,7 +208,7 @@ static void draw_unbordered_text(uint32_t *buffer, unsigned width, unsigned heig
             break;
         }
         
-        draw_char(&buffer[(signed)(x + width * y)], width, height, *string, color, &buffer[width * y_offset], &buffer[width * (is_osd? GB_get_screen_height(&gb) : y_offset + 144)]);
+        draw_char(&buffer[(signed)(x + width * y)], width, height, *string, color, &buffer[width * y_offset], &buffer[width * (is_osd? GB_get_screen_height(current_gameboy()) : y_offset + 144)]);
         x += GLYPH_WIDTH;
         string++;
     }
@@ -284,6 +287,15 @@ static unsigned scrollbar_size;
 static bool mouse_scroling = false;
 
 static unsigned current_selection = 0;
+static unsigned gui_navigation_player = 0;
+
+static SDL_Scancode gui_navigation_key(GB_key_t key)
+{
+    if (gui_navigation_player) {
+        return configuration.p2_keys[key];
+    }
+    return configuration.keys[key];
+}
 
 static enum {
     SHOWING_DROP_MESSAGE,
@@ -296,7 +308,7 @@ static enum {
 
 static char text_input_title[26];
 static char text_input_title2[26];
-static char text_input[26];
+static char text_input[65];
 
 static void (*text_input_callback)(char ch) = NULL;
 
@@ -324,9 +336,15 @@ static void about(unsigned index)
 static void enter_emulation_menu(unsigned index);
 static void enter_graphics_menu(unsigned index);
 static void enter_keyboard_menu(unsigned index);
+static void enter_p2_keyboard_menu(unsigned index);
 static void enter_joypad_menu(unsigned index);
 static void enter_audio_menu(unsigned index);
 static void enter_controls_menu(unsigned index);
+static void enter_link_menu(unsigned index);
+static void enter_remote_link_settings_menu(unsigned index);
+static void begin_join_remote_input(void);
+static void join_remote_invite_from_clipboard(unsigned index);
+static bool copy_remote_invite_to_clipboard(bool show_confirmation);
 static void enter_help_menu(unsigned index);
 static void enter_options_menu(unsigned index);
 static void toggle_audio_recording(unsigned index);
@@ -409,6 +427,456 @@ static void return_to_root_menu(unsigned index)
     recalculate_menu_height();
 }
 
+static void start_local_link(unsigned index)
+{
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Disconnect the current link session before starting Local Link.",
+                                 window);
+        return;
+    }
+    if (!GB_is_inited(current_gameboy())) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Open a ROM before starting Local Link.",
+                                 window);
+        return;
+    }
+    pending_command = GB_SDL_START_LOCAL_LINK_COMMAND;
+}
+
+static void disconnect_link(unsigned index)
+{
+    if (game_session.mode == GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "No link session is active.",
+                                 window);
+        return;
+    }
+    pending_command = GB_SDL_DISCONNECT_LINK_COMMAND;
+}
+
+static void start_remote_host(unsigned index)
+{
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Disconnect the current link session before hosting.",
+                                 window);
+        return;
+    }
+    if (!GB_is_inited(current_gameboy())) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Open a ROM before hosting a Remote Link session.",
+                                 window);
+        return;
+    }
+    if (!copy_remote_invite_to_clipboard(true)) {
+        return;
+    }
+    pending_command = GB_SDL_START_REMOTE_HOST_COMMAND;
+}
+
+static void start_remote_client(unsigned index)
+{
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Disconnect the current link session before joining.",
+                                 window);
+        return;
+    }
+    join_remote_invite_from_clipboard(index);
+}
+
+static const struct menu_item link_menu[] = {
+    {"Local Link...", start_local_link},
+    {"Host Remote Link...", start_remote_host},
+    {"Join Remote Link...", start_remote_client},
+    {"Disconnect", disconnect_link},
+    {"Remote Settings...", enter_remote_link_settings_menu},
+    {"Back", return_to_root_menu},
+    {NULL,}
+};
+
+static void enter_link_menu(unsigned index)
+{
+    current_menu = link_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+typedef enum {
+    REMOTE_TEXT_ENDPOINT,
+    REMOTE_TEXT_ADVERTISED_ENDPOINT,
+    REMOTE_TEXT_PORT,
+    REMOTE_TEXT_SESSION,
+} remote_text_field_t;
+
+static remote_text_field_t remote_text_field;
+static bool remote_text_connect_after_submit;
+
+static void finish_remote_text_input(void)
+{
+    gui_state = SHOWING_MENU;
+    SDL_StopTextInput();
+}
+
+static void remote_setting_text_callback(char ch)
+{
+    if (ch == '\b') {
+        size_t length = strlen(text_input);
+        if (length) text_input[length - 1] = 0;
+        return;
+    }
+    if (ch == '\n') {
+        if (remote_text_field == REMOTE_TEXT_ENDPOINT ||
+            remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT) {
+            bool automatic_address =
+                remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT &&
+                !text_input[0];
+            if (!automatic_address && !strchr(text_input, ':')) {
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                         "Invalid Remote Address",
+                                         "Use an address with a port, for example 192.168.1.20:45930, or leave Public Address empty for automatic LAN detection.",
+                                         window);
+                return;
+            }
+            if (remote_text_field == REMOTE_TEXT_ENDPOINT) {
+                snprintf(configuration.remote_link_endpoint,
+                         sizeof(configuration.remote_link_endpoint),
+                         "%s",
+                         text_input);
+            }
+            else {
+                snprintf(configuration.remote_link_advertised_endpoint,
+                         sizeof(configuration.remote_link_advertised_endpoint),
+                         "%s",
+                         text_input);
+            }
+            finish_remote_text_input();
+            if (remote_text_field == REMOTE_TEXT_ENDPOINT &&
+                remote_text_connect_after_submit) {
+                remote_text_connect_after_submit = false;
+                pending_command = GB_SDL_START_REMOTE_CLIENT_COMMAND;
+            }
+            return;
+        }
+
+        errno = 0;
+        char *end = NULL;
+        unsigned long value = strtoul(text_input, &end, 10);
+        unsigned long maximum = remote_text_field == REMOTE_TEXT_PORT? UINT16_MAX : UINT32_MAX;
+        if (errno || !text_input[0] || *end || value < 1 || value > maximum) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                     "Invalid Remote Link Setting",
+                                     remote_text_field == REMOTE_TEXT_PORT?
+                                         "Port must be between 1 and 65535." :
+                                         "Session ID must be between 1 and 4294967295.",
+                                     window);
+            return;
+        }
+        if (remote_text_field == REMOTE_TEXT_PORT) {
+            configuration.remote_link_port = (uint16_t)value;
+        }
+        else {
+            configuration.remote_link_session_id = (uint32_t)value;
+        }
+        finish_remote_text_input();
+        return;
+    }
+
+    size_t length = strlen(text_input);
+    if (length + 1 >= sizeof(text_input) || ch < ' ') return;
+    if (remote_text_field != REMOTE_TEXT_ENDPOINT &&
+        remote_text_field != REMOTE_TEXT_ADVERTISED_ENDPOINT &&
+        !isdigit((unsigned char)ch)) return;
+    if ((remote_text_field == REMOTE_TEXT_ENDPOINT ||
+         remote_text_field == REMOTE_TEXT_ADVERTISED_ENDPOINT) &&
+        !isalnum((unsigned char)ch) && ch != '.' && ch != '-' && ch != ':' &&
+        ch != '[' && ch != ']') return;
+    text_input[length] = ch;
+    text_input[length + 1] = 0;
+}
+
+static void begin_remote_text_input(remote_text_field_t field,
+                                    const char *title,
+                                    const char *value)
+{
+    remote_text_field = field;
+    snprintf(text_input_title, sizeof(text_input_title), "%s", title);
+    text_input_title2[0] = 0;
+    snprintf(text_input, sizeof(text_input), "%s", value);
+    gui_state = TEXT_INPUT;
+    text_input_callback = remote_setting_text_callback;
+    SDL_StartTextInput();
+}
+
+static const char *remote_endpoint_value(unsigned index)
+{
+    return configuration.remote_link_endpoint[0]? "Set" : "Empty";
+}
+
+static const char *remote_advertised_endpoint_value(unsigned index)
+{
+    return configuration.remote_link_advertised_endpoint[0]?
+        "Manual" : "Auto";
+}
+
+static const char *remote_port_value(unsigned index)
+{
+    static char value[6];
+    snprintf(value, sizeof(value), "%u", configuration.remote_link_port);
+    return value;
+}
+
+static const char *remote_session_value(unsigned index)
+{
+    static char value[11];
+    snprintf(value, sizeof(value), "%lu", (unsigned long)configuration.remote_link_session_id);
+    return value;
+}
+
+static const char *remote_host_view_value(unsigned index)
+{
+    return configuration.remote_link_host_show_p2? "Both" : "P1";
+}
+
+static void edit_remote_endpoint(unsigned index)
+{
+    remote_text_connect_after_submit = false;
+    begin_remote_text_input(REMOTE_TEXT_ENDPOINT,
+                            "Join Address",
+                            configuration.remote_link_endpoint);
+}
+
+static void edit_remote_advertised_endpoint(unsigned index)
+{
+    remote_text_connect_after_submit = false;
+    begin_remote_text_input(REMOTE_TEXT_ADVERTISED_ENDPOINT,
+                            "Public Address",
+                            configuration.remote_link_advertised_endpoint);
+    snprintf(text_input_title2,
+             sizeof(text_input_title2),
+             "%s",
+             "Empty = automatic LAN");
+}
+
+static void begin_join_remote_input(void)
+{
+    remote_text_connect_after_submit = true;
+    begin_remote_text_input(REMOTE_TEXT_ENDPOINT,
+                            "Join Remote Link",
+                            configuration.remote_link_endpoint);
+    snprintf(text_input_title2,
+             sizeof(text_input_title2),
+             "%s",
+             "Enter IP:port");
+}
+
+static void edit_remote_port(unsigned index)
+{
+    char value[6];
+    snprintf(value, sizeof(value), "%u", configuration.remote_link_port);
+    begin_remote_text_input(REMOTE_TEXT_PORT, "Host UDP Port", value);
+}
+
+static void edit_remote_session(unsigned index)
+{
+    char value[11];
+    snprintf(value, sizeof(value), "%lu", (unsigned long)configuration.remote_link_session_id);
+    begin_remote_text_input(REMOTE_TEXT_SESSION, "Session ID", value);
+}
+
+static bool copy_remote_invite_to_clipboard(bool show_confirmation)
+{
+    char endpoint[64];
+    if (configuration.remote_link_advertised_endpoint[0]) {
+        snprintf(endpoint,
+                 sizeof(endpoint),
+                 "%s",
+                 configuration.remote_link_advertised_endpoint);
+    }
+    else if (!remote_udp_get_local_ipv4_endpoint(endpoint,
+                                                  sizeof(endpoint),
+                                                  configuration.remote_link_port)) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link",
+                                 "Could not detect a LAN address. Set Public Address under Remote Settings, then try again.",
+                                 window);
+        return false;
+    }
+    char invite[160];
+    int length = snprintf(invite,
+                          sizeof(invite),
+                          "SBLINK2|%s|%lu",
+                          endpoint,
+                          (unsigned long)configuration.remote_link_session_id);
+    if (length < 0 || (size_t)length >= sizeof(invite) ||
+        SDL_SetClipboardText(invite) != 0) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                                 "SameBoy Link",
+                                 "Could not copy the invite to the clipboard.",
+                                 window);
+        memset(invite, 0, sizeof(invite));
+        return false;
+    }
+    memset(invite, 0, sizeof(invite));
+    if (show_confirmation) {
+        char message[192];
+        snprintf(message,
+                 sizeof(message),
+                 "Invite for %s copied. Send it through a trusted chat; Player 2 only chooses Join Remote Link.",
+                 endpoint);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 message,
+                                 window);
+    }
+    return true;
+}
+
+static void copy_remote_invite(unsigned index)
+{
+    copy_remote_invite_to_clipboard(true);
+}
+
+static bool import_remote_invite(const char *invite)
+{
+    static const char prefix[] = "SBLINK2|";
+    if (!invite) {
+        return false;
+    }
+    while (isspace((unsigned char)*invite)) invite++;
+    size_t invite_length = strlen(invite);
+    while (invite_length &&
+           isspace((unsigned char)invite[invite_length - 1])) {
+        invite_length--;
+    }
+    if (invite_length >= 160 || invite_length < sizeof(prefix) - 1 ||
+        strncmp(invite, prefix, sizeof(prefix) - 1) != 0) {
+        return false;
+    }
+
+    char copy[160];
+    size_t payload_length = invite_length - (sizeof(prefix) - 1);
+    memcpy(copy, invite + sizeof(prefix) - 1, payload_length);
+    copy[payload_length] = 0;
+    char *session_separator = strchr(copy, '|');
+    if (!session_separator) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+    *session_separator++ = 0;
+    if (strchr(session_separator, '|')) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long session_id = strtoul(session_separator, &end, 10);
+    bool valid = copy[0] && strchr(copy, ':') &&
+        strlen(copy) < sizeof(configuration.remote_link_endpoint) &&
+        !errno && session_separator[0] && !*end &&
+        session_id >= 1 && session_id <= UINT32_MAX;
+    if (!valid) {
+        memset(copy, 0, sizeof(copy));
+        return false;
+    }
+
+    bool same_session = configuration.remote_link_session_id == session_id &&
+        strcmp(configuration.remote_link_endpoint, copy) == 0;
+    snprintf(configuration.remote_link_endpoint,
+             sizeof(configuration.remote_link_endpoint),
+             "%s",
+             copy);
+    configuration.remote_link_session_id = (uint32_t)session_id;
+    if (!same_session) {
+        memset(configuration.remote_link_key,
+               0,
+               sizeof(configuration.remote_link_key));
+    }
+    memset(copy, 0, sizeof(copy));
+    return true;
+}
+
+static void join_remote_invite_from_clipboard(unsigned index)
+{
+    if (game_session.mode != GAME_SESSION_SINGLE_PLAYER) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,
+                                 "SameBoy Link",
+                                 "Disconnect the current link session before joining.",
+                                 window);
+        return;
+    }
+    char *invite = SDL_GetClipboardText();
+    bool imported = import_remote_invite(invite);
+    if (invite) {
+        memset(invite, 0, strlen(invite));
+        SDL_free(invite);
+    }
+    if (!imported) {
+        begin_join_remote_input();
+        return;
+    }
+    pending_command = GB_SDL_START_REMOTE_CLIENT_COMMAND;
+}
+
+static void toggle_remote_host_view(unsigned index)
+{
+    configuration.remote_link_host_show_p2 = !configuration.remote_link_host_show_p2;
+}
+
+static void return_to_link_menu(unsigned index)
+{
+    enter_link_menu(index);
+}
+
+static void enter_remote_technical_settings_menu(unsigned index);
+
+static const struct menu_item remote_link_settings_menu[] = {
+    {"Public Address", edit_remote_advertised_endpoint, remote_advertised_endpoint_value},
+    {"Host Screen", toggle_remote_host_view, remote_host_view_value},
+    {"Copy Invite", copy_remote_invite},
+    {"Network Settings...", enter_remote_technical_settings_menu},
+    {"Back", return_to_link_menu},
+    {NULL,}
+};
+
+static void return_to_remote_link_settings(unsigned index)
+{
+    enter_remote_link_settings_menu(index);
+}
+
+static const struct menu_item remote_technical_settings_menu[] = {
+    {"UDP Port", edit_remote_port, remote_port_value},
+    {"Session", edit_remote_session, remote_session_value},
+    {"Join Address", edit_remote_endpoint, remote_endpoint_value},
+    {"Back", return_to_remote_link_settings},
+    {NULL,}
+};
+
+static void enter_remote_technical_settings_menu(unsigned index)
+{
+    current_menu = remote_technical_settings_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static void enter_remote_link_settings_menu(unsigned index)
+{
+    current_menu = remote_link_settings_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
 #ifdef _WIN32
 static void associate_rom_files(unsigned index);
 #endif
@@ -455,11 +923,11 @@ extern struct menu_item modify_cheat_menu[];
 
 static void save_cheats(void)
 {
-    extern char *filename;
-    size_t path_length = strlen(filename);
+    const char *rom_path = current_emulator_slot()->rom_path;
+    size_t path_length = strlen(rom_path);
     char cheat_path[path_length + 5];
-    replace_extension(filename, path_length, cheat_path, ".cht");
-    GB_save_cheats(&gb, cheat_path);
+    replace_extension(rom_path, path_length, cheat_path, ".cht");
+    GB_save_cheats(current_gameboy(), cheat_path);
 }
 
 static void rename_callback(char ch)
@@ -469,7 +937,7 @@ static void rename_callback(char ch)
         return;
     }
     if (ch == '\n') {
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         text_input,
                         current_cheat->address,
@@ -501,7 +969,7 @@ static void rename_cheat(unsigned index)
     gui_state = TEXT_INPUT;
     text_input_callback = rename_callback;
     SDL_StartTextInput();
-    GB_update_cheat(&gb,
+    GB_update_cheat(current_gameboy(),
                     current_cheat,
                     current_cheat->description,
                     current_cheat->address,
@@ -516,7 +984,7 @@ static void rename_cheat(unsigned index)
 
 static void toggle_cheat(unsigned index)
 {
-    GB_update_cheat(&gb,
+    GB_update_cheat(current_gameboy(),
                     current_cheat,
                     current_cheat->description,
                     current_cheat->address,
@@ -577,7 +1045,7 @@ static void change_cheat_address_callback(char ch)
             s++;
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         address,
@@ -662,7 +1130,7 @@ static void change_cheat_value_callback(char ch)
             s++;
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         current_cheat->address,
@@ -740,7 +1208,7 @@ static void change_cheat_old_value_callback(char ch)
             }
         }
         
-        GB_update_cheat(&gb,
+        GB_update_cheat(current_gameboy(),
                         current_cheat,
                         current_cheat->description,
                         current_cheat->address,
@@ -784,7 +1252,7 @@ static void enter_cheats_menu(unsigned index);
 
 static void delete_cheat(unsigned index)
 {
-    GB_remove_cheat(&gb, current_cheat);
+    GB_remove_cheat(current_gameboy(), current_cheat);
     save_cheats();
     enter_cheats_menu(0);
 }
@@ -802,12 +1270,12 @@ struct menu_item modify_cheat_menu[] = {
 
 static void toggle_cheats(unsigned index)
 {
-    GB_set_cheats_enabled(&gb, !GB_cheats_enabled(&gb));
+    GB_set_cheats_enabled(current_gameboy(), !GB_cheats_enabled(current_gameboy()));
 }
 
 static void add_cheat(unsigned index)
 {
-    current_cheat = GB_add_cheat(&gb, "New Cheat", 0, 0, 0, 0, false, true);
+    current_cheat = GB_add_cheat(current_gameboy(), "New Cheat", 0, 0, 0, 0, false, true);
     modify_cheat_menu[0].string = current_cheat->description;
     current_menu = modify_cheat_menu;
     current_selection = 0;
@@ -829,7 +1297,7 @@ static void import_cheat_callback(char ch)
             return;
         }
         
-        current_cheat = GB_import_cheat(&gb, text_input, "Imported Cheat", true);
+        current_cheat = GB_import_cheat(current_gameboy(), text_input, "Imported Cheat", true);
         if (current_cheat) {
             gui_state = SHOWING_MENU;
             modify_cheat_menu[0].string = current_cheat->description;
@@ -876,7 +1344,7 @@ static void import_cheat(unsigned index)
 
 static void modify_cheat(unsigned index)
 {
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, NULL);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), NULL);
     current_cheat = cheats[index - 3];
     modify_cheat_menu[0].string = current_cheat->description;
     current_menu = modify_cheat_menu;
@@ -886,13 +1354,13 @@ static void modify_cheat(unsigned index)
 
 static const char *checkbox_for_cheat(unsigned index)
 {
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, NULL);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), NULL);
     return cheats[index - 3]->enabled? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
 }
 
 static const char *cheats_global_checkbox(unsigned index)
 {
-    return GB_cheats_enabled(&gb)? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
+    return GB_cheats_enabled(current_gameboy())? CHECKBOX_ON_STRING : CHECKBOX_OFF_STRING;
 }
 
 static void enter_cheats_menu(unsigned index)
@@ -902,7 +1370,7 @@ static void enter_cheats_menu(unsigned index)
         free(cheats_menu);
     }
     size_t cheat_count;
-    const GB_cheat_t *const *cheats = GB_get_cheats(&gb, &cheat_count);
+    const GB_cheat_t *const *cheats = GB_get_cheats(current_gameboy(), &cheat_count);
     cheats_menu = calloc(cheat_count + 5, sizeof(struct menu_item));
     cheats_menu[0] = (struct menu_item){"New Cheat", add_cheat};
     cheats_menu[1] = (struct menu_item){"Import Cheat", import_cheat};
@@ -921,6 +1389,7 @@ static const struct menu_item paused_menu[] = {
     {"Resume", NULL},
     {"Open ROM", open_rom},
     {"Hot Swap Cartridge", cart_swap},
+    {"Link", enter_link_menu},
     {"Options", enter_options_menu},
     {"Cheats", enter_cheats_menu},
     {audio_recording_menu_item, toggle_audio_recording},
@@ -1074,12 +1543,12 @@ static void cycle_rewind(unsigned index)
     for (unsigned i = 0; i < sizeof(rewind_lengths) / sizeof(rewind_lengths[0]) - 1; i++) {
         if (configuration.rewind_length == rewind_lengths[i]) {
             configuration.rewind_length = rewind_lengths[i + 1];
-            GB_set_rewind_length(&gb, configuration.rewind_length);
+            GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
             return;
         }
     }
     configuration.rewind_length = rewind_lengths[0];
-    GB_set_rewind_length(&gb, configuration.rewind_length);
+    GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
 }
 
 static void cycle_rewind_backwards(unsigned index)
@@ -1087,12 +1556,12 @@ static void cycle_rewind_backwards(unsigned index)
     for (unsigned i = 1; i < sizeof(rewind_lengths) / sizeof(rewind_lengths[0]); i++) {
         if (configuration.rewind_length == rewind_lengths[i]) {
             configuration.rewind_length = rewind_lengths[i - 1];
-            GB_set_rewind_length(&gb, configuration.rewind_length);
+            GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
             return;
         }
     }
     configuration.rewind_length = rewind_lengths[sizeof(rewind_lengths) / sizeof(rewind_lengths[0]) - 1];
-    GB_set_rewind_length(&gb, configuration.rewind_length);
+    GB_set_rewind_length(current_gameboy(), configuration.rewind_length);
 }
 
 static const char *current_rewind_string(unsigned index)
@@ -1920,6 +2389,7 @@ static void modify_key(unsigned index)
 }
 
 static const char *key_name(unsigned index);
+static unsigned keyboard_mapping_player = 1;
 
 static const struct menu_item keyboard_menu[] = {
     {"Right:", modify_key, key_name,},
@@ -1939,8 +2409,25 @@ static const struct menu_item keyboard_menu[] = {
     {NULL,}
 };
 
+static const struct menu_item p2_keyboard_menu[] = {
+    {"Right:", modify_key, key_name,},
+    {"Left:", modify_key, key_name,},
+    {"Up:", modify_key, key_name,},
+    {"Down:", modify_key, key_name,},
+    {"A:", modify_key, key_name,},
+    {"B:", modify_key, key_name,},
+    {"Select:", modify_key, key_name,},
+    {"Start:", modify_key, key_name,},
+    {"Back", enter_controls_menu},
+    {NULL,}
+};
+
 static const char *key_name(unsigned index)
 {
+    if (keyboard_mapping_player == 2) {
+        SDL_Scancode code = configuration.p2_keys[index];
+        return code? SDL_GetScancodeName(code) : "Not Set";
+    }
     SDL_Scancode code = index >= GB_CONF_KEYS_COUNT? configuration.keys_2[index - GB_CONF_KEYS_COUNT] : configuration.keys[index];
     if (!code) return "Not Set";
     return SDL_GetScancodeName(code);
@@ -1948,22 +2435,69 @@ static const char *key_name(unsigned index)
 
 static void enter_keyboard_menu(unsigned index)
 {
+    keyboard_mapping_player = 1;
     current_menu = keyboard_menu;
     current_selection = 0;
     scroll = 0;
     recalculate_menu_height();
 }
 
-static unsigned joypad_index = 0;
-static SDL_GameController *controller = NULL;
+static void enter_p2_keyboard_menu(unsigned index)
+{
+    keyboard_mapping_player = 2;
+    current_menu = p2_keyboard_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+#define JOYPAD_PLAYER_COUNT 2
+#define JOYPAD_INDEX_NONE UINT8_MAX
+
+static unsigned joypad_mapping_player = 0;
+static SDL_GameController *controllers[JOYPAD_PLAYER_COUNT] = {NULL, NULL};
+static SDL_Joystick *joysticks[JOYPAD_PLAYER_COUNT] = {NULL, NULL};
+static SDL_Haptic *haptics[JOYPAD_PLAYER_COUNT] = {NULL, NULL};
 SDL_Haptic *haptic = NULL;
 SDL_Joystick *joystick = NULL;
+
+static uint8_t *current_joypad_configuration(void)
+{
+    return joypad_mapping_player == 0?
+        configuration.joypad_configuration : configuration.p2_joypad_configuration;
+}
+
+static uint8_t *current_joypad_axises(void)
+{
+    return joypad_mapping_player == 0?
+        configuration.joypad_axises : configuration.p2_joypad_axises;
+}
+
+static const char *current_joypad_player(unsigned index)
+{
+    return joypad_mapping_player == 0? "Player 1" : "Player 2";
+}
+
+static void cycle_joypad_player(unsigned index)
+{
+    joypad_mapping_player = (joypad_mapping_player + 1) % JOYPAD_PLAYER_COUNT;
+}
+
+static void cycle_joypad_player_backwards(unsigned index)
+{
+    joypad_mapping_player = (joypad_mapping_player + JOYPAD_PLAYER_COUNT - 1) %
+        JOYPAD_PLAYER_COUNT;
+}
 
 static const char *current_joypad_name(unsigned index)
 {
     static char name[23] = {0,};
-    const char *orig_name = joystick? SDL_JoystickName(joystick) : NULL;
-    if (!orig_name) return "Not Found";
+    SDL_Joystick *selected = joysticks[joypad_mapping_player];
+    const char *orig_name = selected? SDL_JoystickName(selected) : NULL;
+    if (!orig_name) {
+        return configuration.player_joypad_indices[joypad_mapping_player] ==
+            JOYPAD_INDEX_NONE? "None" : "Not Found";
+    }
     unsigned i = 0;
     
     // SDL returns a name with repeated and trailing spaces
@@ -1983,64 +2517,47 @@ static const char *current_joypad_name(unsigned index)
 
 static void cycle_joypads(unsigned index)
 {
-    joypad_index++;
-    if (joypad_index >= SDL_NumJoysticks()) {
-        joypad_index = 0;
+    uint8_t *selected = &configuration.player_joypad_indices[joypad_mapping_player];
+    int count = SDL_NumJoysticks();
+    if (*selected == JOYPAD_INDEX_NONE) {
+        *selected = count? 0 : JOYPAD_INDEX_NONE;
     }
-    
-    if (haptic) {
-        SDL_HapticClose(haptic);
-        haptic = NULL;
-    }
-    
-    if (controller) {
-        SDL_GameControllerClose(controller);
-        controller = NULL;
-    }
-    else if (joystick) {
-        SDL_JoystickClose(joystick);
-        joystick = NULL;
-    }
-    if ((controller = SDL_GameControllerOpen(joypad_index))) {
-        joystick = SDL_GameControllerGetJoystick(controller);
+    else if (*selected + 1 < count) {
+        (*selected)++;
     }
     else {
-        joystick = SDL_JoystickOpen(joypad_index);
+        *selected = JOYPAD_INDEX_NONE;
     }
-    if (joystick) {
-        haptic = SDL_HapticOpenFromJoystick(joystick);
+    if (*selected != JOYPAD_INDEX_NONE) {
+        unsigned other_player = (joypad_mapping_player + 1) % JOYPAD_PLAYER_COUNT;
+        if (configuration.player_joypad_indices[other_player] == *selected) {
+            configuration.player_joypad_indices[other_player] = JOYPAD_INDEX_NONE;
+        }
     }
+    connect_joypad();
 }
 
 static void cycle_joypads_backwards(unsigned index)
 {
-    joypad_index--;
-    if (joypad_index >= SDL_NumJoysticks()) {
-        joypad_index = SDL_NumJoysticks() - 1;
+    uint8_t *selected = &configuration.player_joypad_indices[joypad_mapping_player];
+    int count = SDL_NumJoysticks();
+    if (*selected == JOYPAD_INDEX_NONE) {
+        *selected = count? (uint8_t)(count - 1) : JOYPAD_INDEX_NONE;
     }
-    
-    if (haptic) {
-        SDL_HapticClose(haptic);
-        haptic = NULL;
-    }
-    
-    if (controller) {
-        SDL_GameControllerClose(controller);
-        controller = NULL;
-    }
-    else if (joystick) {
-        SDL_JoystickClose(joystick);
-        joystick = NULL;
-    }
-    if ((controller = SDL_GameControllerOpen(joypad_index))) {
-        joystick = SDL_GameControllerGetJoystick(controller);
+    else if (*selected > 0 && *selected <= count) {
+        (*selected)--;
     }
     else {
-        joystick = SDL_JoystickOpen(joypad_index);
+        *selected = JOYPAD_INDEX_NONE;
     }
-    if (joystick) {
-        haptic = SDL_HapticOpenFromJoystick(joystick);
-    }}
+    if (*selected != JOYPAD_INDEX_NONE) {
+        unsigned other_player = (joypad_mapping_player + 1) % JOYPAD_PLAYER_COUNT;
+        if (configuration.player_joypad_indices[other_player] == *selected) {
+            configuration.player_joypad_indices[other_player] = JOYPAD_INDEX_NONE;
+        }
+    }
+    connect_joypad();
+}
 
 static void detect_joypad_layout(unsigned index)
 {
@@ -2100,21 +2617,21 @@ static const char *current_background_control_mode(unsigned index)
 
 static void cycle_hotkey(unsigned index)
 {
-    if (configuration.hotkey_actions[index - 2] == HOTKEY_MAX) {
-        configuration.hotkey_actions[index - 2] = 0;
+    if (configuration.hotkey_actions[index - 3] == HOTKEY_MAX) {
+        configuration.hotkey_actions[index - 3] = 0;
     }
     else {
-        configuration.hotkey_actions[index - 2]++;
+        configuration.hotkey_actions[index - 3]++;
     }
 }
 
 static void cycle_hotkey_backwards(unsigned index)
 {
-    if (configuration.hotkey_actions[index - 2] == 0) {
-        configuration.hotkey_actions[index - 2] = HOTKEY_MAX;
+    if (configuration.hotkey_actions[index - 3] == 0) {
+        configuration.hotkey_actions[index - 3] = HOTKEY_MAX;
     }
     else {
-        configuration.hotkey_actions[index - 2]--;
+        configuration.hotkey_actions[index - 3]--;
     }
 }
 
@@ -2146,7 +2663,7 @@ static const char *current_hotkey(unsigned index)
         "Load State Slot 9",
         "Save State Slot 10",
         "Load State Slot 10",
-    }) [configuration.hotkey_actions[index - 2]];
+    }) [configuration.hotkey_actions[index - 3]];
 }
 
 static void increase_rumble_strength(unsigned index)
@@ -2173,6 +2690,7 @@ const char *current_rumble_strength(unsigned index)
 }
 
 static const struct menu_item joypad_menu[] = {
+    {"Mapping for:", cycle_joypad_player, current_joypad_player, cycle_joypad_player_backwards},
     {"Joypad:", cycle_joypads, current_joypad_name, cycle_joypads_backwards},
     {"Configure layout", detect_joypad_layout},
     {"Hotkey 1 Action:", cycle_hotkey, current_hotkey, cycle_hotkey_backwards},
@@ -2195,8 +2713,18 @@ static void enter_joypad_menu(unsigned index)
 
 joypad_button_t get_joypad_button(uint8_t physical_button)
 {
+    return get_player_joypad_button(0, physical_button);
+}
+
+joypad_button_t get_player_joypad_button(unsigned player, uint8_t physical_button)
+{
+    if (player >= JOYPAD_PLAYER_COUNT) {
+        return JOYPAD_BUTTONS_MAX;
+    }
+    const uint8_t *mapping = player == 0?
+        configuration.joypad_configuration : configuration.p2_joypad_configuration;
     for (unsigned i = 0; i < JOYPAD_BUTTONS_MAX; i++) {
-        if (configuration.joypad_configuration[i] == physical_button) {
+        if (mapping[i] == physical_button) {
             return i;
         }
     }
@@ -2205,8 +2733,18 @@ joypad_button_t get_joypad_button(uint8_t physical_button)
 
 joypad_axis_t get_joypad_axis(uint8_t physical_axis)
 {
+    return get_player_joypad_axis(0, physical_axis);
+}
+
+joypad_axis_t get_player_joypad_axis(unsigned player, uint8_t physical_axis)
+{
+    if (player >= JOYPAD_PLAYER_COUNT) {
+        return JOYPAD_AXISES_MAX;
+    }
+    const uint8_t *mapping = player == 0?
+        configuration.joypad_axises : configuration.p2_joypad_axises;
     for (unsigned i = 0; i < JOYPAD_AXISES_MAX; i++) {
-        if (configuration.joypad_axises[i] == physical_axis) {
+        if (mapping[i] == physical_axis) {
             return i;
         }
     }
@@ -2214,30 +2752,70 @@ joypad_axis_t get_joypad_axis(uint8_t physical_axis)
 }
 
 
+static void close_joypad(unsigned player)
+{
+    if (haptics[player]) {
+        SDL_HapticClose(haptics[player]);
+        haptics[player] = NULL;
+    }
+    if (controllers[player]) {
+        SDL_GameControllerClose(controllers[player]);
+        controllers[player] = NULL;
+        joysticks[player] = NULL;
+    }
+    else if (joysticks[player]) {
+        SDL_JoystickClose(joysticks[player]);
+        joysticks[player] = NULL;
+    }
+}
+
 void connect_joypad(void)
 {
-    if (joystick && !SDL_NumJoysticks()) {
-        if (controller) {
-            SDL_GameControllerClose(controller);
-            controller = NULL;
-            joystick = NULL;
+    int count = SDL_NumJoysticks();
+    if (configuration.player_joypad_indices[0] != JOYPAD_INDEX_NONE &&
+        configuration.player_joypad_indices[0] ==
+            configuration.player_joypad_indices[1]) {
+        /* A physical SDL device belongs to exactly one local player. Preserve
+           P2 here because duplicate state is normally created while assigning
+           the only connected controller to P2; P1 always retains keyboard. */
+        configuration.player_joypad_indices[0] = JOYPAD_INDEX_NONE;
+    }
+    for (unsigned player = 0; player < JOYPAD_PLAYER_COUNT; player++) {
+        uint8_t selected = configuration.player_joypad_indices[player];
+        SDL_JoystickID desired_instance = selected < count?
+            SDL_JoystickGetDeviceInstanceID(selected) : -1;
+        if (joysticks[player] &&
+            SDL_JoystickInstanceID(joysticks[player]) == desired_instance) {
+            continue;
+        }
+
+        close_joypad(player);
+        if (desired_instance < 0) {
+            continue;
+        }
+        controllers[player] = SDL_GameControllerOpen(selected);
+        if (controllers[player]) {
+            joysticks[player] = SDL_GameControllerGetJoystick(controllers[player]);
         }
         else {
-            SDL_JoystickClose(joystick);
-            joystick = NULL;
+            joysticks[player] = SDL_JoystickOpen(selected);
+        }
+        if (player == 0 && joysticks[player]) {
+            haptics[player] = SDL_HapticOpenFromJoystick(joysticks[player]);
         }
     }
-    else if (!joystick && SDL_NumJoysticks()) {
-        if ((controller = SDL_GameControllerOpen(0))) {
-            joystick = SDL_GameControllerGetJoystick(controller);
-        }
-        else {
-            joystick = SDL_JoystickOpen(0);
+    joystick = joysticks[0];
+    haptic = haptics[0];
+}
+
+int joypad_player_for_instance(SDL_JoystickID instance_id)
+{
+    for (unsigned player = 0; player < JOYPAD_PLAYER_COUNT; player++) {
+        if (joysticks[player] && SDL_JoystickInstanceID(joysticks[player]) == instance_id) {
+            return (int)player;
         }
     }
-    if (joystick) {
-        haptic = SDL_HapticOpenFromJoystick(joystick);
-    }
+    return -1;
 }
 
 static void toggle_mouse_control(unsigned index)
@@ -2251,7 +2829,8 @@ static const char *mouse_control_string(unsigned index)
 }
 
 static const struct menu_item controls_menu[] = {
-    {"Keyboard Options", enter_keyboard_menu},
+    {"Keyboard P1", enter_keyboard_menu},
+    {"Keyboard P2", enter_p2_keyboard_menu},
     {"Joypad Options", enter_joypad_menu},
     {"Motion-controlled games:", toggle_mouse_control, mouse_control_string, toggle_mouse_control},
     {"Back", enter_options_menu},
@@ -2266,9 +2845,189 @@ static void enter_controls_menu(unsigned index)
     recalculate_menu_height();
 }
 
+static void enter_remote_client_menu(unsigned index);
+
+static const char *remote_client_filter_string(unsigned index)
+{
+    if (uses_gl()) {
+        return current_filter_name(index);
+    }
+    return configuration.remote_client_filter? "Bilinear" : "Nearest Neighbor";
+}
+
+static void cycle_remote_client_filter(unsigned index)
+{
+    if (uses_gl()) {
+        cycle_filter(index);
+    }
+    else {
+        configuration.remote_client_filter ^= 1;
+    }
+}
+
+static void cycle_remote_client_filter_backwards(unsigned index)
+{
+    if (uses_gl()) {
+        cycle_filter_backwards(index);
+    }
+    else {
+        configuration.remote_client_filter ^= 1;
+    }
+}
+
+static void cycle_remote_client_scale(unsigned index)
+{
+    cycle_scaling(index);
+}
+
+static void cycle_remote_client_scale_backwards(unsigned index)
+{
+    cycle_scaling_backwards(index);
+}
+
+static void cycle_remote_client_window_scale(unsigned index)
+{
+    if (configuration.default_scale == GB_SDL_DEFAULT_SCALE_MAX) {
+        configuration.default_scale = 1;
+    }
+    else {
+        configuration.default_scale++;
+    }
+    SDL_SetWindowSize(window,
+                      160 * configuration.default_scale,
+                      144 * configuration.default_scale);
+}
+
+static void cycle_remote_client_window_scale_backwards(unsigned index)
+{
+    if (configuration.default_scale == 1) {
+        configuration.default_scale = GB_SDL_DEFAULT_SCALE_MAX;
+    }
+    else {
+        configuration.default_scale--;
+    }
+    SDL_SetWindowSize(window,
+                      160 * configuration.default_scale,
+                      144 * configuration.default_scale);
+}
+
+static const char *remote_client_fullscreen_string(unsigned index)
+{
+    return configuration.remote_client_fullscreen? "Enabled" : "Disabled";
+}
+
+static void toggle_remote_client_fullscreen(unsigned index)
+{
+    configuration.remote_client_fullscreen = !configuration.remote_client_fullscreen;
+    SDL_SetWindowFullscreen(window,
+                            configuration.remote_client_fullscreen?
+                                SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+}
+
+static const char *remote_client_mute_string(unsigned index)
+{
+    return configuration.remote_client_muted? "Muted" : "Playing";
+}
+
+static void toggle_remote_client_mute(unsigned index)
+{
+    configuration.remote_client_muted = !configuration.remote_client_muted;
+}
+
+static const struct menu_item remote_client_video_menu[] = {
+    {"Scaling Mode:", cycle_remote_client_scale, current_scaling_mode, cycle_remote_client_scale_backwards},
+    {"Scaling Filter:", cycle_remote_client_filter, remote_client_filter_string, cycle_remote_client_filter_backwards},
+    {"Window Scale:", cycle_remote_client_window_scale, current_default_scale, cycle_remote_client_window_scale_backwards},
+    {"Fullscreen:", toggle_remote_client_fullscreen, remote_client_fullscreen_string, toggle_remote_client_fullscreen},
+    {"Back", enter_remote_client_menu},
+    {NULL,}
+};
+
+static void enter_remote_client_video_menu(unsigned index)
+{
+    current_menu = remote_client_video_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static const struct menu_item remote_client_audio_menu[] = {
+    {"Audio:", toggle_remote_client_mute, remote_client_mute_string, toggle_remote_client_mute},
+    {"Volume:", increase_volume, volume_string, decrease_volume},
+    {"Back", enter_remote_client_menu},
+    {NULL,}
+};
+
+static void enter_remote_client_audio_menu(unsigned index)
+{
+    current_menu = remote_client_audio_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static const struct menu_item remote_client_keyboard_menu[] = {
+    {"Right:", modify_key, key_name},
+    {"Left:", modify_key, key_name},
+    {"Up:", modify_key, key_name},
+    {"Down:", modify_key, key_name},
+    {"A:", modify_key, key_name},
+    {"B:", modify_key, key_name},
+    {"Select:", modify_key, key_name},
+    {"Start:", modify_key, key_name},
+    {"Back", enter_remote_client_menu},
+    {NULL,}
+};
+
+static void enter_remote_client_keyboard_menu(unsigned index)
+{
+    keyboard_mapping_player = 2;
+    current_menu = remote_client_keyboard_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static const struct menu_item remote_client_joypad_menu[] = {
+    {"Joypad:", cycle_joypads, current_joypad_name, cycle_joypads_backwards},
+    {"Configure layout", detect_joypad_layout},
+    {"Analog Stick:", toggle_use_faux_analog_inputs, current_faux_analog_inputs, toggle_use_faux_analog_inputs},
+    {"Enable Control:", toggle_allow_background_controllers, current_background_control_mode, toggle_allow_background_controllers},
+    {"Back", enter_remote_client_menu},
+    {NULL,}
+};
+
+static void enter_remote_client_joypad_menu(unsigned index)
+{
+    joypad_mapping_player = 1;
+    current_menu = remote_client_joypad_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
+static const struct menu_item remote_client_menu[] = {
+    {"Resume", NULL},
+    {"Video Options", enter_remote_client_video_menu},
+    {"Audio Options", enter_remote_client_audio_menu},
+    {"Keyboard P2", enter_remote_client_keyboard_menu},
+    {"Controller P2", enter_remote_client_joypad_menu},
+    {"Disconnect", disconnect_link},
+    {"Quit SameBoy", item_exit},
+    {NULL,}
+};
+
+static void enter_remote_client_menu(unsigned index)
+{
+    current_menu = remote_client_menu;
+    current_selection = 0;
+    scroll = 0;
+    recalculate_menu_height();
+}
+
 static void toggle_audio_recording(unsigned index)
 {
-    if (!GB_is_inited(&gb)) {
+    if (!GB_is_inited(current_gameboy())) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "Cannot start audio recording, open a ROM file first.", window);
         return;
     }
@@ -2276,7 +3035,7 @@ static void toggle_audio_recording(unsigned index)
     if (is_recording) {
         is_recording = false;
         show_osd_text("Audio recording ended");
-        int error = GB_stop_audio_recording(&gb);
+        int error = GB_stop_audio_recording(current_gameboy());
         if (error) {
             char *message = NULL;
             asprintf(&message, "Could not finalize recording: %s", strerror(error));
@@ -2287,7 +3046,7 @@ static void toggle_audio_recording(unsigned index)
         memcpy(audio_recording_menu_item, item_string, sizeof(item_string));
         return;
     }
-    char *filename = do_save_recording_dialog(GB_get_sample_rate(&gb));
+    char *filename = do_save_recording_dialog(GB_get_sample_rate(current_gameboy()));
     
     /* Drop events as it SDL seems to catch several in-dialog events */
     SDL_Event event;
@@ -2313,7 +3072,7 @@ static void toggle_audio_recording(unsigned index)
             }
         }
         
-        int error = GB_start_audio_recording(&gb, filename, format);
+        int error = GB_start_audio_recording(current_gameboy(), filename, format);
         free(filename);
         if (error) {
             char *message = NULL;
@@ -2332,8 +3091,8 @@ static void toggle_audio_recording(unsigned index)
 
 void convert_mouse_coordinates(signed *x, signed *y)
 {
-    signed width = GB_get_screen_width(&gb);
-    signed height = GB_get_screen_height(&gb);
+    signed width = current_presentation_width();
+    signed height = current_presentation_height();
     signed x_offset = (width - 160) / 2;
     signed y_offset = (height - 144) / 2;
 
@@ -2360,7 +3119,8 @@ void update_swap_interval(void)
     }
 }
 
-void run_gui(bool is_running)
+static void run_gui_with_root(bool is_running,
+                              const struct menu_item *selected_root_menu)
 {
     SDL_ShowCursor(SDL_ENABLE);
     connect_joypad();
@@ -2387,8 +3147,8 @@ void run_gui(bool is_running)
         }
     }
 
-    unsigned width = GB_get_screen_width(&gb);
-    unsigned height = GB_get_screen_height(&gb);
+    unsigned width = current_presentation_width();
+    unsigned height = current_presentation_height();
     unsigned x_offset = (width - 160) / 2;
     unsigned y_offset = (height - 144) / 2;
     uint32_t pixels[width * height];
@@ -2402,7 +3162,7 @@ void run_gui(bool is_running)
     SDL_Event event = {0,};
     gui_state = is_running? SHOWING_MENU : SHOWING_DROP_MESSAGE;
     bool should_render = true;
-    current_menu = root_menu = is_running? paused_menu : nonpaused_menu;
+    current_menu = root_menu = selected_root_menu;
     recalculate_menu_height();
     current_selection = 0;
     scroll = 0;
@@ -2432,15 +3192,16 @@ void run_gui(bool is_running)
                         case SDL_SCANCODE_L:
                             break;
                             
-                        default:
-                                 if (event.key.keysym.scancode == configuration.keys[GB_KEY_RIGHT]) event.key.keysym.scancode = SDL_SCANCODE_RIGHT;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_LEFT]) event.key.keysym.scancode = SDL_SCANCODE_LEFT;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_UP]) event.key.keysym.scancode = SDL_SCANCODE_UP;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_DOWN]) event.key.keysym.scancode = SDL_SCANCODE_DOWN;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_A]) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_START]) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
-                            else if (event.key.keysym.scancode == configuration.keys[GB_KEY_B]) event.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+                        default: {
+                                 if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_RIGHT)) event.key.keysym.scancode = SDL_SCANCODE_RIGHT;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_LEFT)) event.key.keysym.scancode = SDL_SCANCODE_LEFT;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_UP)) event.key.keysym.scancode = SDL_SCANCODE_UP;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_DOWN)) event.key.keysym.scancode = SDL_SCANCODE_DOWN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_A)) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_START)) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_B)) event.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
                             break;
+                        }
                     }
                     break;
 
@@ -2517,8 +3278,14 @@ void run_gui(bool is_running)
                     }
                     break;
                 case SDL_JOYBUTTONDOWN:
+                    if (joypad_player_for_instance(event.jbutton.which) !=
+                        (int)gui_navigation_player) {
+                        break;
+                    }
                     event.type = SDL_KEYDOWN;
-                    joypad_button_t button = get_joypad_button(event.jbutton.button);
+                    joypad_button_t button = get_player_joypad_button(
+                        gui_navigation_player,
+                        event.jbutton.button);
                     if (button == JOYPAD_BUTTON_A) {
                         event.key.keysym.scancode = SDL_SCANCODE_RETURN;
                     }
@@ -2532,6 +3299,10 @@ void run_gui(bool is_running)
                     break;
 
                 case SDL_JOYHATMOTION: {
+                    if (joypad_player_for_instance(event.jhat.which) !=
+                        (int)gui_navigation_player) {
+                        break;
+                    }
                     uint8_t value = event.jhat.value;
                     if (value != 0) {
                         uint32_t scancode =
@@ -2550,8 +3321,14 @@ void run_gui(bool is_running)
                }
                     
                 case SDL_JOYAXISMOTION: {
+                    if (joypad_player_for_instance(event.jaxis.which) !=
+                        (int)gui_navigation_player) {
+                        break;
+                    }
                     static bool axis_active[2] = {false, false};
-                    joypad_axis_t axis = get_joypad_axis(event.jaxis.axis);
+                    joypad_axis_t axis = get_player_joypad_axis(
+                        gui_navigation_player,
+                        event.jaxis.axis);
                     if (axis == JOYPAD_AXISES_X) {
                         if (!axis_active[0] && event.jaxis.value > JOYSTICK_HIGH) {
                             axis_active[0] = true;
@@ -2617,7 +3394,7 @@ void run_gui(bool is_running)
             }
             case SDL_DROPFILE: {
                 if (GB_is_save_state(event.drop.file)) {
-                    if (GB_is_inited(&gb)) {
+                    if (GB_is_inited(current_gameboy())) {
                         dropped_state_file = event.drop.file;
                         pending_command = GB_SDL_LOAD_STATE_FROM_FILE_COMMAND;
                     }
@@ -2633,25 +3410,35 @@ void run_gui(bool is_running)
                 }
             }
             case SDL_JOYBUTTONDOWN: {
-                if (gui_state == WAITING_FOR_JBUTTON && joypad_configuration_progress != JOYPAD_BUTTONS_MAX) {
+                if (gui_state == WAITING_FOR_JBUTTON &&
+                    joypad_player_for_instance(event.jbutton.which) ==
+                        (int)joypad_mapping_player &&
+                    joypad_configuration_progress != JOYPAD_BUTTONS_MAX) {
                     should_render = true;
-                    configuration.joypad_configuration[joypad_configuration_progress++] = event.jbutton.button;
+                    current_joypad_configuration()[joypad_configuration_progress++] =
+                        event.jbutton.button;
                 }
                 break;
             }
             case SDL_JOYHATMOTION: {
-                if (gui_state == WAITING_FOR_JBUTTON && joypad_configuration_progress == JOYPAD_BUTTON_RIGHT) {
+                if (gui_state == WAITING_FOR_JBUTTON &&
+                    joypad_player_for_instance(event.jhat.which) ==
+                        (int)joypad_mapping_player &&
+                    joypad_configuration_progress == JOYPAD_BUTTON_RIGHT) {
                     should_render = true;
-                    configuration.joypad_configuration[joypad_configuration_progress++] = -1;
-                    configuration.joypad_configuration[joypad_configuration_progress++] = -1;
-                    configuration.joypad_configuration[joypad_configuration_progress++] = -1;
-                    configuration.joypad_configuration[joypad_configuration_progress++] = -1;
+                    uint8_t *mapping = current_joypad_configuration();
+                    mapping[joypad_configuration_progress++] = -1;
+                    mapping[joypad_configuration_progress++] = -1;
+                    mapping[joypad_configuration_progress++] = -1;
+                    mapping[joypad_configuration_progress++] = -1;
                 }
                 break;
             }
                 
             case SDL_JOYAXISMOTION: {
                 if (gui_state == WAITING_FOR_JBUTTON &&
+                    joypad_player_for_instance(event.jaxis.which) ==
+                        (int)joypad_mapping_player &&
                     joypad_configuration_progress == JOYPAD_BUTTONS_MAX &&
                     abs(event.jaxis.value) >= 0x4000) {
                     if (joypad_axis_temp == (uint8_t)-1) {
@@ -2659,12 +3446,12 @@ void run_gui(bool is_running)
                     }
                     else if (joypad_axis_temp != event.jaxis.axis) {
                         if (joypad_axis_temp < event.jaxis.axis) {
-                            configuration.joypad_axises[JOYPAD_AXISES_X] = joypad_axis_temp;
-                            configuration.joypad_axises[JOYPAD_AXISES_Y] = event.jaxis.axis;
+                            current_joypad_axises()[JOYPAD_AXISES_X] = joypad_axis_temp;
+                            current_joypad_axises()[JOYPAD_AXISES_Y] = event.jaxis.axis;
                         }
                         else {
-                            configuration.joypad_axises[JOYPAD_AXISES_Y] = joypad_axis_temp;
-                            configuration.joypad_axises[JOYPAD_AXISES_X] = event.jaxis.axis;
+                            current_joypad_axises()[JOYPAD_AXISES_Y] = joypad_axis_temp;
+                            current_joypad_axises()[JOYPAD_AXISES_X] = event.jaxis.axis;
                         }
                         
                         gui_state = SHOWING_MENU;
@@ -2738,10 +3525,16 @@ void run_gui(bool is_running)
                              event.key.keysym.scancode == SDL_SCANCODE_KP_ENTER) {
                         text_input_callback('\n');
                         should_render = true;
+                        if (pending_command != GB_SDL_NO_COMMAND) {
+                            return;
+                        }
                     }
                 }
                 else if (gui_state == WAITING_FOR_KEY) {
-                    if (current_selection > 8) {
+                    if (keyboard_mapping_player == 2) {
+                        configuration.p2_keys[current_selection] = event.key.keysym.scancode;
+                    }
+                    else if (current_selection > 8) {
                         configuration.keys_2[current_selection - GB_CONF_KEYS_COUNT] = event.key.keysym.scancode;
                     }
                     else {
@@ -2774,11 +3567,11 @@ void run_gui(bool is_running)
                 else if (event.key.keysym.scancode == SDL_SCANCODE_RETURN && gui_state == WAITING_FOR_JBUTTON) {
                     should_render = true;
                     if (joypad_configuration_progress != JOYPAD_BUTTONS_MAX) {
-                        configuration.joypad_configuration[joypad_configuration_progress] = -1;
+                        current_joypad_configuration()[joypad_configuration_progress] = -1;
                     }
                     else {
-                        configuration.joypad_axises[0] = -1;
-                        configuration.joypad_axises[1] = -1;
+                        current_joypad_axises()[0] = -1;
+                        current_joypad_axises()[1] = -1;
                     }
                     joypad_configuration_progress++;
                     
@@ -3015,6 +3808,23 @@ void run_gui(bool is_running)
 #endif
         }
     }
+}
+
+void run_gui(bool is_running)
+{
+    gui_navigation_player = 0;
+    run_gui_with_root(is_running, is_running? paused_menu : nonpaused_menu);
+}
+
+enum pending_command run_remote_client_gui(void)
+{
+    pending_command = GB_SDL_NO_COMMAND;
+    gui_navigation_player = 1;
+    run_gui_with_root(true, remote_client_menu);
+    gui_navigation_player = 0;
+    enum pending_command command = pending_command;
+    pending_command = GB_SDL_NO_COMMAND;
+    return command;
 }
 
 static void __attribute__ ((constructor)) list_custom_palettes(void)

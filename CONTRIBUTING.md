@@ -1,5 +1,38 @@
 # SameBoy Coding and Contribution Guidelines
 
+## SameBoy Link fork notes
+
+SameBoy Link development happens on the `sameboy-link` branch. Before changing
+the multiplayer frontend, read `README.md`, `ROADMAP.md`, `TODO.md` and
+`TECHNICAL_OVERVIEW.md`; completed work and measured regression results belong
+in `DEVELOPMENT_PROGRESS.md`.
+
+Keep multiplayer policy, session lifecycle, Remote Play transport and Windows/
+SDL presentation code outside `Core/` unless an emulator-core change is both
+necessary and independently justified. Local Link and Remote Host must continue
+to share the same dual-core scheduler rather than introducing parallel link
+implementations.
+
+On Windows, use the reproducible build documented in `build-faq.md`:
+
+```powershell
+.\build-windows.ps1
+.\test-windows-link.ps1 -RomPath "C:\path\to\link-game.gb"
+.\publish-windows-build.ps1 -DestinationRoot "M:\SAME-LINKTEST"
+.\start-performance-baseline.ps1 `
+  -Setup "desktop-eth-host-laptop-wifi-client" `
+  -RunNumber 1
+.\summarize-windows-link-logs.ps1 `
+  -HostPath "M:\SAME-LINKTEST\LOGS\TIMESTAMP-HOSTPC-host-ID" `
+  -ClientPath "M:\SAME-LINKTEST\LOGS\TIMESTAMP-CLIENTPC-client-ID" `
+  -TestLabel "lan-test"
+```
+
+Before submitting a change, run the relevant single-player, Local Link and/or
+Remote Host/Client regression paths, check `git diff --check`, and document any
+new latency, packet-loss or compatibility measurements. Never commit ROMs,
+battery saves, generated regression captures or session credentials.
+
 ## Issues
 
 GitHub Issues are the most effective way to report a bug or request a feature in SameBoy. When reporting a bug, make sure you use the latest stable release, and make sure you mention the SameBoy frontend (Cocoa, SDL, Libretro) and operating system you're using. If you're using Linux/BSD/etc, or you build your own copy of SameBoy for another reason, give as much details as possible on your environment.

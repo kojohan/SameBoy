@@ -1,0 +1,426 @@
+# SameBoy Link — Technical Overview
+
+This document is the high-level technical introduction for contributors. For the detailed implementation sequence, see `SAMEBOY_LINK_TECHNICAL_PLAN.md`.
+
+## Current snapshot — 2026-08-19
+
+The fork now has a reproducible Windows build, two-core Local Link, isolated input/save/audio state, explicit four-mode session lifecycle and a protocol-v8 Remote Play implementation. The normal SDL menu supports Local Link, direct-IP Host/Join and clean Disconnect; P1/P2 have persistent independent keyboard/controller mappings with two-controller hotplug support. LAN, repeated Wi-Fi/Wi-Fi play, direct public-IPv4 play and the complete menu-driven two-PC session flow have been physically verified with the lossless native-framebuffer/adaptive-PCM media path. Protocol v8 retains that path and adds automatic first-client key transfer plus a session-lifetime client lock; automated loopback, second-client rejection and reconnect tests pass. Remote Client has a dedicated network thread, zero-queue presentation/latency telemetry, aspect-correct resizing, the full SameBoy OpenGL shader/filter pipeline and an Escape menu for local video/audio/P2-control settings. Stronger transport security, optional lower-bandwidth video and production-grade Internet connectivity remain planned work.
+
+## 1. Why SameBoy
+
+SameBoy already provides highly accurate Game Boy / Game Boy Color emulation and exposes the serial primitives required for link-cable emulation. Its libretro frontend already demonstrates a working two-core local link implementation.
+
+The fork should therefore avoid changing the emulator core unless absolutely necessary. Most work belongs in the SDL/Windows frontend plus new multiplayer/network modules.
+
+## 2. Primary architecture
+
+The project has two multiplayer models.
+
+### Remote Play — primary Internet mode
+
+Both linked Game Boys run on the host:
+
+```text
+HOST PC
+
++------------------+       local emulated       +------------------+
+| SameBoy Core P1  |<------ link cable -------->| SameBoy Core P2  |
++------------------+                            +------------------+
+        ^                                                   ^
+        |                                                   |
+    local input                                      remote P2 input
+                                                            |
+                                                            |
+CLIENT PC <-------------------------------------------------+
+
+CLIENT PC <---------------- P2 video/audio ----------------- HOST PC
+```
+
+Consequences:
+
+- only the host requires the ROM;
+- no ROM region/revision/hash matching is required for Remote Play;
+- Game Boy serial timing remains entirely local to the host;
+- the client needs no running emulator core for gameplay;
+- the client can still reuse SameBoy rendering/scaling/filter code.
+
+### Native NetLink — later optional mode
+
+```text
+PC A SameBoy Core <---- serial/link data over Internet ----> PC B SameBoy Core
+```
+
+This is harder because both emulators must remain synchronized across network latency and jitter. It is deliberately deferred until Remote Play is stable.
+
+## 3. Existing SameBoy primitives we reuse
+
+Relevant core APIs include:
+
+```c
+GB_set_serial_transfer_bit_start_callback()
+GB_set_serial_transfer_bit_end_callback()
+GB_serial_get_data_bit()
+GB_serial_set_data_bit()
+GB_disconnect_serial()
+```
+
+The existing `libretro/libretro.c` implementation is the reference for:
+
+- two `GB_gameboy_t` instances;
+- cross-connected serial callbacks;
+- separate framebuffers;
+- separate input/audio paths;
+- cycle-delta scheduling between cores.
+
+The initial local-link implementation should adapt that proven path rather than invent a new serial protocol.
+
+## 4. SDL frontend refactor
+
+Upstream SDL SameBoy is largely organized around one global emulator instance. This fork now implements:
+
+```text
+GameSession
+   |
+   +-- EmulatorSlot[0]
+   |       +-- GB_gameboy_t
+   |       +-- framebuffer
+   |       +-- save/persistent data
+   |       +-- input state
+   |
+   +-- EmulatorSlot[1]
+           +-- GB_gameboy_t
+           +-- framebuffer
+           +-- save/persistent data
+           +-- input state
+```
+
+Normal one-player SameBoy behavior was regression-tested before slot 1 and Local Link were activated.
+
+## 5. Local link scheduling
+
+Do not initially run the two Game Boy cores on unrelated OS threads. Use the same basic signed cycle-delta scheduler already proven in the libretro frontend:
+
+```c
+signed delta = 0;
+
+while (!p1_vblank || !p2_vblank) {
+    if (delta >= 0) {
+        delta -= GB_run(&p1);
+    }
+    else {
+        delta += GB_run(&p2);
+    }
+}
+```
+
+This keeps link timing deterministic and avoids injecting host thread-scheduling jitter into Game Boy serial timing.
+
+Encoding/network work can use worker threads later.
+
+## 6. Remote input
+
+The client sends complete current P2 button state rather than individual key-up/key-down events.
+
+Conceptual packet:
+
+```c
+struct RemoteInputPacket {
+    uint32_t protocol_version;
+    uint32_t session_id;
+    uint32_t sequence;
+    uint16_t buttons;
+    uint64_t client_timestamp_us;
+};
+```
+
+Advantages:
+
+- newest packet supersedes old packets;
+- packet loss does not leave a button permanently stuck;
+- latency can be measured precisely;
+- realtime input can use UDP.
+
+## 7. Video path
+
+The host streams Player 2's completed **native framebuffer**, not a screenshot of the Windows window.
+
+```text
+P2 SameBoy framebuffer
+        |
+        v
+encoder / packetizer
+        |
+        v
+network
+        |
+        v
+client decoder
+        |
+        v
+native framebuffer
+        |
+        v
+SameBoy/SDL rendering path
+        |
+        +-- nearest neighbour
+        +-- integer scaling
+        +-- color correction
+        +-- shaders/filters
+```
+
+For ordinary DMG/CGB gameplay the native image is typically 160x144. At 32 bits per pixel a raw frame is only 92,160 bytes, so we can prioritize latency and image integrity rather than extreme compression ratio.
+
+Current and planned quality modes:
+
+- **Lossless reference** — implemented using native-framebuffer pixel RLE;
+- **Balanced** — planned default after video-pacing and codec measurements;
+- **Low Bandwidth** — planned more aggressive compression.
+
+GPU hardware encode/decode may be used where benchmarks show a real end-to-end benefit, but it is not assumed to be faster for such a small source.
+
+## 8. Audio path
+
+Keep audio identifiable per emulator core.
+
+Host local audio can select/mix P1 and P2. Remote Play normally sends the P2 stream to the client using small blocks and a deliberately bounded jitter buffer.
+
+Protocol v8 retains protocol v5's uncompressed 48 kHz stereo PCM and adaptive jitter buffer unchanged. Physical LAN and Internet testing of v5 found this path more stable than the experimental Opus option, so Opus is deferred rather than used by default. The client records audio inter-arrival average, p50, p95, p99 and maximum using bounded 1 ms histograms, with one compact summary per ten-second window rather than per-packet log writes. A physical schema-v3 Wi-Fi/Wi-Fi run verified the metadata and distributions with no audible audio fault, so the current buffer parameters remain unchanged.
+
+Before sending input or accepting media, the v8 client sends a fixed-size
+bootstrap `Hello`. The host replies to that source endpoint with `Accepted`,
+`Pairing`, `Session mismatch`, `Protocol mismatch` or `Authentication failed`; only an accepted endpoint may send
+input and clock packets. The client repeats this lightweight exchange every
+500 ms as connection liveness, changes to `Waiting` after 500 ms without an
+initial answer and returns to it after two seconds without a host response.
+Handshake replies use endpoint-specific sends so a mismatched probe cannot
+replace the active media peer. Each menu-started Host lifetime generates a fresh
+128-bit internal key with Windows CNG. Before a client is locked, the host sends
+that key to the first requester in a `Pairing` response. The client confirms it
+with HMAC-SHA-256, after which requests without the key are rejected until Host
+ends. The client retains the key internally for reconnect; keys are never shown
+in the UI or written to diagnostics.
+
+The normal direct-IP UI does not expose a key. The copied bounded `SBLINK2`
+record contains only endpoint and Session ID; `Join Remote Link…` strictly
+parses those settings before launching P2. This is
+a development invitation sent through a trusted channel, not the future opaque,
+short-lived coordination-service invite.
+
+The initial key transfer is plaintext and individual input, clock, video and
+audio datagrams are not authenticated or encrypted. Pairing prevents ordinary
+later clients from taking over an established host session; it is not protection
+against an active network attacker. Stronger security remains a public-release
+task rather than complexity exposed in the current player flow.
+
+After the first accepted input packet, P1 receives a two-second dedicated
+`Player 2 connected` notice on the local primary framebuffer. The Remote Client
+independently overlays `Player 1 connected` on its copied presentation frame
+for two seconds after the accepted handshake. Host OSD is restricted to the
+primary slot while Remote Host is active, so local P1 notices are never encoded
+into the P2 framebuffer sent over UDP. Connection notices intentionally remain
+visible even when the optional general OSD setting is disabled. Neither notice
+adds a media queue.
+
+Disconnect feedback is symmetric. After the host's 500 ms input timeout, P1
+shows `Player 2 disconnected`. After two seconds without a handshake response,
+P2 overlays `Player 1 disconnected` on the last locally copied gameplay frame
+for two seconds and then replaces it with `Waiting for host`. A later accepted
+handshake and fresh frame show the connected notice again. These transitions
+are presentation-only and do not preserve or replay stale input.
+
+The host distinguishes temporary transport loss from a newly launched/joined
+client by the handshake request ID and UDP endpoint. The same client generation
+keeps its monotonically increasing input sequence across a temporary outage. A
+new generation clears the old button mask, input timestamps, sequence baseline
+and queued audio before accepting its first input packet. This lets P2 use
+Disconnect followed by Join again without restarting P1, including when Windows
+reuses the same local UDP endpoint, while still rejecting stale/reordered input
+inside one client generation.
+
+The reciprocal lifetime is identified by the non-zero host ID in each accepted
+response. If P1 ends its hosted session and starts hosting again at the same
+address, the continuing P2 detects the new host generation and resets only its
+generation-bound video, audio and clock state. Incomplete video assembly and
+the audio ring buffer are discarded, sequence gates accept the new streams from
+their first packets, and accumulated application/session state remains alive.
+P2 therefore leaves the waiting screen on the first fresh frame without needing
+to disconnect or restart itself.
+
+Clock checkpoints and input-to-present samples also carry client elapsed time.
+Schema-v4 reports group smoothed RTT/jitter plus video-network and total latency
+into ten-second windows. Sender queue age is intentionally absent because the
+accepted immediate-send transport has no sender queue.
+
+An extended 7.5-minute Wi-Fi/Wi-Fi run physically verified these windows with
+stable network/video results. Audio was acceptable in practice despite three
+technical underflow counters, so no latency-increasing PCM change is made
+without a future repeatable audible fault.
+
+A large audio buffer must never silently become the dominant latency source.
+
+## 9. Save architecture
+
+Remote Play has two virtual cartridges on the host, so each `EmulatorSlot` requires independent persistent storage.
+
+Never do this:
+
+```text
+P1 ----+
+       +--> game.sav
+P2 ----+
+```
+
+Instead:
+
+```text
+P1 --> profile/session P1 save
+P2 --> profile/session P2 save
+```
+
+V1 keeps both saves on the host. Later, the remote player may upload a portable P2 save before a session and receive the updated save afterward.
+
+Portable transfer must be transactional: backup, temporary file, cryptographic hash verification, atomic promotion and recovery after disconnect. The persistence API should allow `.sav`, RTC and auxiliary cartridge data.
+
+## 10. Internet connectivity
+
+The user-facing target is zero manual network configuration.
+
+The current prototype has proven direct UDP play over the public Internet using manual public-IP entry and UDP port forwarding. That is a development test path only; it is not the intended user experience. Protocol v8 locks a Host lifetime to its automatically paired first client, but the initial key transfer and realtime datagrams are not encrypted.
+
+Connection establishment may combine:
+
+```text
+coordination server
+       |
+       +-- direct IPv6
+       +-- UDP hole punching
+       +-- UPnP IGD
+       +-- NAT-PMP
+       +-- PCP
+       +-- relay fallback
+```
+
+Direct P2P is preferred because video traffic is much larger than controller input. Relay is required for restrictive NAT/CGNAT cases.
+
+The coordination server does **not** run SameBoy. It manages rooms, tokens, endpoint candidates and relay information.
+
+## 11. Invite architecture
+
+Users can join using either a short room code or an invite URL.
+
+Custom application URL:
+
+```text
+sameboylink://join/<opaque-token>
+```
+
+Shareable web URL:
+
+```text
+https://<project-domain>/join/<opaque-token>
+```
+
+The token is opaque, random, short-lived and resolved by the coordination service. Raw IP addresses, ports, ROM paths and save paths should not be embedded in the invite.
+
+Normal flow:
+
+```text
+Host Game
+   |
+Copy Invite Link
+   |
+friend clicks
+   |
+SameBoy Link opens
+   |
+coordination service resolves token
+   |
+connection candidates negotiated
+   |
+direct path or relay
+   |
+Connected
+```
+
+## 12. Latency strategy
+
+The relevant measurement is controller-to-display latency, not just encoder execution time.
+
+Instrument at least:
+
+```text
+client controller event
+input packet sent
+host packet received
+input applied to P2
+P2 frame completed
+encode begin/end
+video sent/received
+decode begin/end
+texture upload
+presentation request
+```
+
+Design rules:
+
+- newest input wins;
+- queues stay bounded;
+- obsolete video frames are dropped rather than queued;
+- no B-frame/large lookahead pipeline in low-latency modes;
+- optimize based on measured end-to-end behavior.
+
+Initial processing targets on typical modern hardware are roughly under 1 ms each for emulation-side processing, encode and decode where practical, with the understanding that network propagation and frame/display timing will usually dominate.
+
+## 13. Security boundaries
+
+Before public Internet release:
+
+- treat every packet and URL as untrusted;
+- validate packet lengths, protocol versions and session IDs;
+- use TLS for coordination APIs;
+- replace protocol-v8's plaintext first-client pairing with a secure server-assisted or cryptographic pairing flow when public release requires it;
+- authenticate every realtime datagram, reject replay and encrypt P2P/relay traffic;
+- never accept arbitrary peer-provided filesystem paths;
+- never let an invite URL execute arbitrary commands;
+- do not deserialize arbitrary remote SameBoy save-state blobs in Remote Play mode.
+
+## 14. Current source layout
+
+```text
+SDL/
+  session/
+    emulator_slot.c/.h
+    game_session.c/.h
+    local_link.c/.h
+    multiplayer_input.c/.h
+
+  remote_play/
+    remote_play_host.c/.h
+    remote_play_client.c/.h
+    protocol.c/.h
+    transport_udp.c/.h
+    video_codec.c/.h
+  link_diagnostics.c/.h
+
+  native_netlink/
+    ... later experimental backend ...
+
+test-windows-link.ps1
+  automated single-player, Local Link and Remote Play loopback smoke test
+
+publish-windows-build.ps1 / run-shared-windows-build.ps1
+  versioned, checksummed shared Windows runtime and optional local cache
+```
+
+## 15. Documentation map
+
+- `README.md` — project introduction for visitors.
+- `ROADMAP.md` — phase-by-phase development plan.
+- `TODO.md` — actionable checklist.
+- `REMOTE_PLAY_PERFORMANCE_PLAN.md` — physical network evidence and measured pacing/audio/video optimization gates.
+- `LINK_UI_ARCHITECTURE.md` — target Link menu, session modes and control ownership.
+- `TECHNICAL_OVERVIEW.md` — this contributor-oriented architecture summary.
+- `SAMEBOY_LINK_TECHNICAL_PLAN.md` — detailed implementation notes and decisions.
+- `SAMEBOY_LINK_PLAN.md` — original project/product planning notes.
+- `build-faq.md` — reproducible Windows build and automated smoke-test usage.
+- `CONTRIBUTING.md` — upstream conventions plus SameBoy Link contributor workflow.
