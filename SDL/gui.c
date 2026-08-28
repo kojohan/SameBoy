@@ -289,6 +289,14 @@ static bool mouse_scroling = false;
 static unsigned current_selection = 0;
 static unsigned gui_navigation_player = 0;
 
+static SDL_Scancode gui_navigation_key(GB_key_t key)
+{
+    if (gui_navigation_player) {
+        return configuration.p2_keys[key];
+    }
+    return configuration.keys[key];
+}
+
 static enum {
     SHOWING_DROP_MESSAGE,
     SHOWING_MENU,
@@ -3185,15 +3193,13 @@ static void run_gui_with_root(bool is_running,
                             break;
                             
                         default: {
-                            const SDL_Scancode *navigation_keys = gui_navigation_player?
-                                configuration.p2_keys : configuration.keys;
-                                 if (event.key.keysym.scancode == navigation_keys[GB_KEY_RIGHT]) event.key.keysym.scancode = SDL_SCANCODE_RIGHT;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_LEFT]) event.key.keysym.scancode = SDL_SCANCODE_LEFT;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_UP]) event.key.keysym.scancode = SDL_SCANCODE_UP;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_DOWN]) event.key.keysym.scancode = SDL_SCANCODE_DOWN;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_A]) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_START]) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
-                            else if (event.key.keysym.scancode == navigation_keys[GB_KEY_B]) event.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
+                                 if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_RIGHT)) event.key.keysym.scancode = SDL_SCANCODE_RIGHT;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_LEFT)) event.key.keysym.scancode = SDL_SCANCODE_LEFT;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_UP)) event.key.keysym.scancode = SDL_SCANCODE_UP;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_DOWN)) event.key.keysym.scancode = SDL_SCANCODE_DOWN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_A)) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_START)) event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+                            else if (event.key.keysym.scancode == gui_navigation_key(GB_KEY_B)) event.key.keysym.scancode = SDL_SCANCODE_ESCAPE;
                             break;
                         }
                     }
